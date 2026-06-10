@@ -1,0 +1,5 @@
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\publish\StarlimsNativeHost.exe
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\publish\StarlimsNativeHost.dll
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\publish\StarlimsNativeHost.deps.json
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\publish\StarlimsNativeHost.runtimeconfig.json
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\publish\StarlimsNativeHost.pdb

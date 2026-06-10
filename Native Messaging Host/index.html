@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <input id="filePath" style="width: 600px"
+           value="C:\Users\mahto\STARLIMS_POC\test-from-browser.txt">
+
+    <br><br>
+
+    <textarea id="content" rows="10" cols="80">Hello from browser</textarea>
+
+    <br><br>
+
+    <button id="writeOpen">Write and open</button>
+    <button id="watch">Watch once and read</button>
+
+    <pre id="output"></pre>
+
+    <script>
+        const output = document.getElementById("output");
+
+        function sendToHost(message) {
+            return new Promise(resolve => {
+                const requestId = crypto.randomUUID();
+
+                function handler(event) {
+                    if (event.data?.source !== "STARLIMS_LOCAL_TEST_RESPONSE") return;
+                    if (event.data?.requestId !== requestId) return;
+
+                    window.removeEventListener("message", handler);
+                    resolve(event.data.response);
+                }
+
+                window.addEventListener("message", handler);
+
+                window.postMessage({
+                    source: "STARLIMS_LOCAL_TEST",
+                    requestId,
+                    ...message
+                }, "*");
+            });
+        }
+
+        document.getElementById("writeOpen").onclick = async () => {
+            const response = await sendToHost({
+                action: "writeAndOpenFile",
+                filePath: document.getElementById("filePath").value,
+                content: document.getElementById("content").value
+            });
+
+            output.textContent = JSON.stringify(response, null, 2);
+        };
+
+        document.getElementById("watch").onclick = async () => {
+            output.textContent = "Watching file. Save it in Notepad...";
+
+            const response = await sendToHost({
+                action: "watchFileOnce",
+                filePath: document.getElementById("filePath").value
+            });
+
+            output.textContent = JSON.stringify(response, null, 2);
+
+            if (response?.content !== undefined) {
+                document.getElementById("content").value = response.content;
+            }
+        };
+    </script>
+</body>
+</html>

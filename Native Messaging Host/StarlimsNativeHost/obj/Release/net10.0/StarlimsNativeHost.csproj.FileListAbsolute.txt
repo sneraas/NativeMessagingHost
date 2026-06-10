@@ -1,0 +1,14 @@
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\StarlimsNativeHost.exe
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\StarlimsNativeHost.deps.json
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\StarlimsNativeHost.runtimeconfig.json
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\StarlimsNativeHost.dll
+C:\Native Messaging Host\StarlimsNativeHost\bin\Release\net10.0\StarlimsNativeHost.pdb
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.GeneratedMSBuildEditorConfig.editorconfig
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.AssemblyInfoInputs.cache
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.AssemblyInfo.cs
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.csproj.CoreCompileInputs.cache
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.dll
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\refint\StarlimsNativeHost.dll
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.pdb
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\StarlimsNativeHost.genruntimeconfig.cache
+C:\Native Messaging Host\StarlimsNativeHost\obj\Release\net10.0\ref\StarlimsNativeHost.dll

@@ -1,0 +1,9 @@
+{
+  "name": "no.test.starlims.localfs",
+  "description": "STARLIMS LocalFS proof of concept",
+  "path": "C:\\Native Messaging Host\\StarlimsNativeHost\\bin\\Release\\net10.0\\publish\\StarlimsNativeHost.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://lgdgfobfbinadcodpbedodaccjholpea/"
+  ]
+}
