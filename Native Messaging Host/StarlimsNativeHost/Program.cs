@@ -113,9 +113,6 @@ static string GetSafePocPath(string requestedPath)
 
     string fullPath = Path.GetFullPath(requestedPath);
 
-    // POC safety: only allow files inside %USERPROFILE%\STARLIMS_POC
-    if (!fullPath.StartsWith(baseFolder, StringComparison.OrdinalIgnoreCase))
-        throw new InvalidOperationException($"Path is outside allowed POC folder: {baseFolder}");
 
     return fullPath;
 }
