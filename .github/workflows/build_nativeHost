@@ -11,21 +11,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET 9
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
 
-      - name: Publish
-        run: |
-          dotnet publish "Native Messaging Host/StarlimsNativeHost/StarlimsNativeHost.csproj" `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -o publish
+      - name: Publish native host
+        run: >
+          dotnet publish
+          "Native Messaging Host/StarlimsNativeHost/StarlimsNativeHost.csproj"
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o publish
 
-      - name: Upload artifact
+      - name: Upload native host
         uses: actions/upload-artifact@v4
         with:
           name: StarlimsNativeHost-win-x64
