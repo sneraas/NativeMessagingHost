@@ -16,19 +16,10 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Publish native host
-        run: >
-          dotnet publish
-          "Native Messaging Host/StarlimsNativeHost/StarlimsNativeHost.csproj"
-          -c Release
-          -r win-x64
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:DebugType=None
-          -p:DebugSymbols=false
-          -o publish
+      - name: Publish Native Host
+        run: dotnet publish "Native Messaging Host/StarlimsNativeHost/StarlimsNativeHost.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o publish
 
-      - name: Upload native host
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: StarlimsNativeHost-win-x64
