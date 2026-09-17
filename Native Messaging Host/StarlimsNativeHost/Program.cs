@@ -26,53 +26,125 @@ internal static class Program
 
     private static async Task Main()
     {
+        DebugMessage(
+            "1. Native Messaging Host started.",
+            "START"
+        );
+
         using Stream input = Console.OpenStandardInput();
         using Stream output = Console.OpenStandardOutput();
 
-        while (true)
+        try
         {
-            try
+            DebugMessage(
+                "2. Waiting for message from Edge extension.",
+                "WAITING"
+            );
+
+            string? json = ReadNativeMessage(input);
+
+            if (json is null)
             {
-                string? json = ReadNativeMessage(input);
+                DebugMessage(
+                    "Input stream was closed before any message was received.",
+                    "ERROR"
+                );
 
-                if (json is null)
-                    break;
+                return;
+            }
 
-                NativeRequest request =
-                    JsonSerializer.Deserialize<NativeRequest>(
-                        json,
-                        JsonOptions
-                    )
-                    ?? throw new InvalidOperationException(
-                        "Invalid request."
-                    );
+            DebugMessage(
+                $"3. Message received.\n\n" +
+                $"Length: {json.Length}\n\n" +
+                $"{json}",
+                "MESSAGE RECEIVED"
+            );
 
-                ValidateRequest(request);
+            NativeRequest request =
+                JsonSerializer.Deserialize<NativeRequest>(
+                    json,
+                    JsonOptions
+                )
+                ?? throw new InvalidOperationException(
+                    "Could not deserialize request."
+                );
 
-                ApiFileResult result =
-                    await CallStarlimsApiAsync(request);
+            DebugMessage(
+                $"4. JSON parsed successfully.\n\n" +
+                $"Token length: {request.Token.Length}\n" +
+                $"Key credential: {request.Key}\n" +
+                $"Secret credential: {request.Secret}",
+                "JSON OK"
+            );
 
-                string? filePath = HandleApiResult(result);
+            ValidateRequest(request);
 
-                WriteResponse(output, new
+            DebugMessage(
+                "5. Request validation passed.",
+                "REQUEST OK"
+            );
+
+            ApiFileResult apiResult =
+                await CallStarlimsApiAsync(request);
+
+            DebugMessage(
+                $"11. STARLIMS result parsed.\n\n" +
+                $"FILE_ACTION: {apiResult.FileAction}\n" +
+                $"FILE_NAME: {apiResult.FileName}\n" +
+                $"CLIENT_FILE_PATH: {apiResult.ClientFilePath}\n" +
+                $"FILE_DATA length: {apiResult.FileData.Length}",
+                "API RESULT"
+            );
+
+            string filePath =
+                HandleApiResult(apiResult);
+
+            DebugMessage(
+                $"14. Everything completed successfully.\n\n" +
+                $"File:\n{filePath}",
+                "SUCCESS"
+            );
+
+            WriteResponse(
+                output,
+                new
                 {
                     ok = true,
-                    fileAction = result.FileAction,
+                    fileAction = apiResult.FileAction,
                     filePath
-                });
-            }
-            catch (Exception ex)
+                }
+            );
+        }
+        catch (Exception ex)
+        {
+            DebugMessage(
+                $"Native host failed.\n\n" +
+                $"Type:\n{ex.GetType().FullName}\n\n" +
+                $"Message:\n{ex.Message}\n\n" +
+                $"Stack:\n{ex.StackTrace}",
+                "NATIVE HOST ERROR"
+            );
+
+            try
             {
-                WriteResponse(output, new
-                {
-                    ok = false,
-                    error = ex.Message
-                });
+                WriteResponse(
+                    output,
+                    new
+                    {
+                        ok = false,
+                        error = ex.Message
+                    }
+                );
+            }
+            catch
+            {
+                // Do nothing.
             }
         }
     }
 
-    private static void ValidateRequest(NativeRequest request)
+    private static void ValidateRequest(
+        NativeRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Token))
         {
@@ -84,14 +156,14 @@ internal static class Program
         if (string.IsNullOrWhiteSpace(request.Key))
         {
             throw new InvalidOperationException(
-                "API key credential target is missing."
+                "Key credential name is missing."
             );
         }
 
         if (string.IsNullOrWhiteSpace(request.Secret))
         {
             throw new InvalidOperationException(
-                "API secret credential target is missing."
+                "Secret credential name is missing."
             );
         }
     }
@@ -99,32 +171,83 @@ internal static class Program
     private static async Task<ApiFileResult> CallStarlimsApiAsync(
         NativeRequest nativeRequest)
     {
-        string environment = GetEnvironmentFromCredentialTargets(
-            nativeRequest.Key,
-            nativeRequest.Secret
-        );
-
-        CredentialEntry keyCredential =
-            CredentialManager.ReadGeneric(
-                nativeRequest.Key
-            );
-
-        CredentialEntry secretCredential =
-            CredentialManager.ReadGeneric(
+        string environment =
+            GetEnvironmentFromCredentialTargets(
+                nativeRequest.Key,
                 nativeRequest.Secret
             );
 
-        /*
-         * Both credentials must belong to the same environment.
-         *
-         * Example:
-         *
-         * DEV_API_KEY
-         * Username: DEV
-         *
-         * DEV_API_SECRET
-         * Username: DEV
-         */
+        DebugMessage(
+            $"6. Credential names validated.\n\n" +
+            $"Environment: {environment}\n" +
+            $"Key: {nativeRequest.Key}\n" +
+            $"Secret: {nativeRequest.Secret}",
+            "ENVIRONMENT"
+        );
+
+        CredentialEntry keyCredential;
+
+        try
+        {
+            keyCredential =
+                CredentialManager.ReadGeneric(
+                    nativeRequest.Key
+                );
+        }
+        catch (Exception ex)
+        {
+            DebugMessage(
+                $"Could not read credential:\n" +
+                $"{nativeRequest.Key}\n\n" +
+                $"{ex.Message}\n\n" +
+                $"IMPORTANT:\n" +
+                $"The credential must be stored as a Generic Credential.",
+                "KEY CREDENTIAL FAILED"
+            );
+
+            throw;
+        }
+
+        DebugMessage(
+            $"7. API key credential found.\n\n" +
+            $"Target: {nativeRequest.Key}\n" +
+            $"Username: {keyCredential.UserName}\n" +
+            $"Password length: {keyCredential.Password.Length}\n\n" +
+            $"Password itself is intentionally not shown.",
+            "API KEY FOUND"
+        );
+
+        CredentialEntry secretCredential;
+
+        try
+        {
+            secretCredential =
+                CredentialManager.ReadGeneric(
+                    nativeRequest.Secret
+                );
+        }
+        catch (Exception ex)
+        {
+            DebugMessage(
+                $"Could not read credential:\n" +
+                $"{nativeRequest.Secret}\n\n" +
+                $"{ex.Message}\n\n" +
+                $"IMPORTANT:\n" +
+                $"The credential must be stored as a Generic Credential.",
+                "SECRET CREDENTIAL FAILED"
+            );
+
+            throw;
+        }
+
+        DebugMessage(
+            $"8. API secret credential found.\n\n" +
+            $"Target: {nativeRequest.Secret}\n" +
+            $"Username: {secretCredential.UserName}\n" +
+            $"Password length: {secretCredential.Password.Length}\n\n" +
+            $"Password itself is intentionally not shown.",
+            "API SECRET FOUND"
+        );
 
         if (!string.Equals(
                 keyCredential.UserName,
@@ -132,8 +255,8 @@ internal static class Program
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException(
-                $"Credential '{nativeRequest.Key}' " +
-                $"does not belong to environment '{environment}'."
+                $"API key username '{keyCredential.UserName}' " +
+                $"does not match environment '{environment}'."
             );
         }
 
@@ -143,53 +266,57 @@ internal static class Program
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException(
-                $"Credential '{nativeRequest.Secret}' " +
-                $"does not belong to environment '{environment}'."
+                $"API secret username '{secretCredential.UserName}' " +
+                $"does not match environment '{environment}'."
             );
         }
 
-        string accessKey = keyCredential.Password;
-        string secretKey = secretCredential.Password;
-
-        if (string.IsNullOrEmpty(accessKey))
+        if (string.IsNullOrWhiteSpace(
+                keyCredential.Password))
         {
             throw new UnauthorizedAccessException(
                 "API key credential contains no password."
             );
         }
 
-        if (string.IsNullOrEmpty(secretKey))
+        if (string.IsNullOrWhiteSpace(
+                secretCredential.Password))
         {
             throw new UnauthorizedAccessException(
                 "API secret credential contains no password."
             );
         }
 
-        string apiUrl = GetApiUrl(environment);
+        DebugMessage(
+            "9. Both credentials are valid and belong " +
+            $"to environment '{environment}'.",
+            "CREDENTIALS OK"
+        );
+
+        string accessKey =
+            keyCredential.Password;
+
+        string secretKey =
+            secretCredential.Password;
+
+        string apiBaseUrl =
+            GetApiUrl(environment);
 
         string url =
-            $"{apiUrl}?token=" +
-            Uri.EscapeDataString(nativeRequest.Token);
+            $"{apiBaseUrl}?token=" +
+            Uri.EscapeDataString(
+                nativeRequest.Token
+            );
 
         const string method = "GET";
         const string apiVerb = "";
         const string body = "";
 
-        string timestamp = DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
-
-        /*
-         * Must match STARLIMS signing format exactly:
-         *
-         * URL
-         * GET
-         * AccessKey
-         * ApiVerb
-         * Timestamp
-         * Body
-         */
+        string timestamp =
+            DateTime.UtcNow.ToString(
+                "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+                CultureInfo.InvariantCulture
+            );
 
         string stringToSign =
             $"{url}\n" +
@@ -199,9 +326,20 @@ internal static class Program
             $"{timestamp}\n" +
             $"{body}";
 
-        string signature = CreateSignature(
-            stringToSign,
-            secretKey
+        string signature =
+            CreateSignature(
+                stringToSign,
+                secretKey
+            );
+
+        DebugMessage(
+            $"10. API request prepared.\n\n" +
+            $"URL:\n{url}\n\n" +
+            $"Timestamp:\n{timestamp}\n\n" +
+            $"Access key length: {accessKey.Length}\n" +
+            $"Secret key length: {secretKey.Length}\n" +
+            $"Signature length: {signature.Length}",
+            "CALLING STARLIMS"
         );
 
         using HttpClientHandler handler = new()
@@ -210,12 +348,14 @@ internal static class Program
             PreAuthenticate = true
         };
 
-        using HttpClient client = new(handler);
+        using HttpClient client =
+            new(handler);
 
-        using HttpRequestMessage request = new(
-            HttpMethod.Get,
-            url
-        );
+        using HttpRequestMessage request =
+            new(
+                HttpMethod.Get,
+                url
+            );
 
         request.Headers.TryAddWithoutValidation(
             "SL-API-Auth",
@@ -238,37 +378,100 @@ internal static class Program
             )
         );
 
-        using HttpResponseMessage response =
-            await client.SendAsync(request);
+        HttpResponseMessage response;
 
-        string responseBody =
-            await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            throw new HttpRequestException(
-                $"STARLIMS API returned " +
-                $"{(int)response.StatusCode} " +
-                $"{response.ReasonPhrase}. " +
-                $"{responseBody}"
+            response =
+                await client.SendAsync(
+                    request
+                );
+        }
+        catch (Exception ex)
+        {
+            DebugMessage(
+                $"HTTP request itself failed.\n\n" +
+                $"{ex.GetType().Name}\n\n" +
+                $"{ex.Message}",
+                "HTTP FAILED"
             );
+
+            throw;
         }
 
-        ApiResponse? apiResponse =
-            JsonSerializer.Deserialize<ApiResponse>(
-                responseBody,
-                JsonOptions
-            );
-
-        if (apiResponse?.Result is null ||
-            apiResponse.Result.Count == 0)
+        using (response)
         {
-            throw new InvalidOperationException(
-                "STARLIMS API returned no result."
-            );
-        }
+            string responseBody =
+                await response.Content.ReadAsStringAsync();
 
-        return apiResponse.Result[0];
+            DebugMessage(
+                $"STARLIMS responded.\n\n" +
+                $"HTTP status: {(int)response.StatusCode}\n" +
+                $"{response.StatusCode}\n\n" +
+                $"Response length: {responseBody.Length}",
+                "HTTP RESPONSE"
+            );
+
+            if (!response.IsSuccessStatusCode)
+            {
+                string preview =
+                    responseBody.Length > 2000
+                        ? responseBody[..2000]
+                        : responseBody;
+
+                DebugMessage(
+                    $"STARLIMS API returned an error.\n\n" +
+                    $"HTTP {(int)response.StatusCode} " +
+                    $"{response.ReasonPhrase}\n\n" +
+                    $"Response:\n{preview}",
+                    "STARLIMS API ERROR"
+                );
+
+                throw new HttpRequestException(
+                    $"STARLIMS API returned " +
+                    $"{(int)response.StatusCode} " +
+                    $"{response.ReasonPhrase}."
+                );
+            }
+
+            ApiResponse? apiResponse;
+
+            try
+            {
+                apiResponse =
+                    JsonSerializer.Deserialize<ApiResponse>(
+                        responseBody,
+                        JsonOptions
+                    );
+            }
+            catch (Exception ex)
+            {
+                DebugMessage(
+                    $"Could not parse STARLIMS JSON.\n\n" +
+                    $"{ex.Message}\n\n" +
+                    $"Response length: {responseBody.Length}",
+                    "JSON PARSE FAILED"
+                );
+
+                throw;
+            }
+
+            if (apiResponse?.Result is null)
+            {
+                throw new InvalidOperationException(
+                    "STARLIMS returned no Result property."
+                );
+            }
+
+            if (apiResponse.Result.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "STARLIMS returned an empty Result array."
+                );
+            }
+
+            return apiResponse.Result[0];
+        }
     }
 
     private static string CreateSignature(
@@ -276,48 +479,58 @@ internal static class Program
         string secretKey)
     {
         byte[] keyBytes =
-            Encoding.UTF8.GetBytes(secretKey);
+            Encoding.UTF8.GetBytes(
+                secretKey
+            );
 
         byte[] dataBytes =
-            Encoding.UTF8.GetBytes(stringToSign);
+            Encoding.UTF8.GetBytes(
+                stringToSign
+            );
 
         byte[] hashBytes;
 
-        using (HMACSHA256 hmac = new(keyBytes))
+        using (
+            HMACSHA256 hmac =
+                new(keyBytes)
+        )
         {
             hashBytes =
-                hmac.ComputeHash(dataBytes);
+                hmac.ComputeHash(
+                    dataBytes
+                );
         }
 
         string signatureRaw =
-            Convert.ToBase64String(hashBytes);
+            Convert.ToBase64String(
+                hashBytes
+            );
 
         /*
-         * PowerShell used:
-         *
-         * HttpUtility.UrlEncode(signatureRaw)
-         *
-         * Base64 only contains a limited set of characters
-         * requiring escaping (+ / =), so EscapeDataString
-         * gives us the required representation here.
+         * Matches the URL encoding performed
+         * by the PowerShell proof of concept.
          */
-
-        return Uri.EscapeDataString(signatureRaw);
+        return WebUtility.UrlEncode(
+            signatureRaw
+        );
     }
 
     private static string GetEnvironmentFromCredentialTargets(
         string keyTarget,
         string secretTarget)
     {
-        const string keySuffix = "_API_KEY";
-        const string secretSuffix = "_API_SECRET";
+        const string keySuffix =
+            "_API_KEY";
+
+        const string secretSuffix =
+            "_API_SECRET";
 
         if (!keyTarget.EndsWith(
                 keySuffix,
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException(
-                "Invalid API key credential target."
+                $"Invalid key credential name: {keyTarget}"
             );
         }
 
@@ -326,22 +539,19 @@ internal static class Program
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException(
-                "Invalid API secret credential target."
+                $"Invalid secret credential name: {secretTarget}"
             );
         }
 
         string keyEnvironment =
-            keyTarget[..^keySuffix.Length];
+            keyTarget[
+                ..^keySuffix.Length
+            ];
 
         string secretEnvironment =
-            secretTarget[..^secretSuffix.Length];
-
-        if (string.IsNullOrWhiteSpace(keyEnvironment))
-        {
-            throw new UnauthorizedAccessException(
-                "Credential environment is missing."
-            );
-        }
+            secretTarget[
+                ..^secretSuffix.Length
+            ];
 
         if (!string.Equals(
                 keyEnvironment,
@@ -349,24 +559,25 @@ internal static class Program
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new UnauthorizedAccessException(
-                "API key and API secret belong " +
-                "to different environments."
+                "API key and secret reference different environments."
             );
         }
 
-        return keyEnvironment.ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(
+                keyEnvironment))
+        {
+            throw new UnauthorizedAccessException(
+                "Environment name is empty."
+            );
+        }
+
+        return keyEnvironment
+            .ToUpperInvariant();
     }
 
     private static string GetApiUrl(
         string environment)
     {
-        /*
-         * The extension does NOT control the URL.
-         *
-         * The environment obtained from the credentials
-         * determines which STARLIMS API may be contacted.
-         */
-
         return environment switch
         {
             "DEV" =>
@@ -383,39 +594,44 @@ internal static class Program
              *     "Folders/SendDocumentToClient",
              */
 
-            _ => throw new UnauthorizedAccessException(
-                $"Unknown STARLIMS environment: {environment}"
-            )
+            _ =>
+                throw new UnauthorizedAccessException(
+                    $"Environment '{environment}' is not configured."
+                )
         };
     }
 
-    private static string? HandleApiResult(
+    private static string HandleApiResult(
         ApiFileResult result)
     {
         if (string.IsNullOrWhiteSpace(
                 result.FileAction))
         {
             throw new InvalidOperationException(
-                "STARLIMS API returned no FILE_ACTION."
+                "FILE_ACTION is missing."
             );
         }
 
-        /*
-         * FILE_ACTION comes from STARLIMS.
-         *
-         * Nothing from the browser decides what the
-         * native host does with the returned file.
-         */
+        DebugMessage(
+            $"12. Processing FILE_ACTION:\n\n" +
+            $"{result.FileAction}",
+            "FILE ACTION"
+        );
 
-        switch (result.FileAction.ToLowerInvariant())
+        switch (
+            result.FileAction
+                .Trim()
+                .ToLowerInvariant()
+        )
         {
             case "readwrite":
-                return SaveAndOpenFile(result);
+                return SaveAndOpenFile(
+                    result
+                );
 
             default:
                 throw new InvalidOperationException(
-                    $"Unsupported FILE_ACTION: " +
-                    $"{result.FileAction}"
+                    $"Unsupported FILE_ACTION: {result.FileAction}"
                 );
         }
     }
@@ -447,19 +663,16 @@ internal static class Program
             );
         }
 
-        /*
-         * FILE_NAME must only be a filename.
-         * This prevents FILE_NAME itself from injecting
-         * another directory.
-         */
+        string safeFileName =
+            Path.GetFileName(
+                result.FileName
+            );
 
-        string fileName =
-            Path.GetFileName(result.FileName);
-
-        if (string.IsNullOrWhiteSpace(fileName))
+        if (string.IsNullOrWhiteSpace(
+                safeFileName))
         {
             throw new InvalidOperationException(
-                "Invalid FILE_NAME."
+                "FILE_NAME is invalid."
             );
         }
 
@@ -468,13 +681,23 @@ internal static class Program
                 result.ClientFilePath
             );
 
-        Directory.CreateDirectory(directory);
-
         string filePath =
             Path.Combine(
                 directory,
-                fileName
+                safeFileName
             );
+
+        DebugMessage(
+            $"13. Ready to write file.\n\n" +
+            $"Directory:\n{directory}\n\n" +
+            $"Filename:\n{safeFileName}\n\n" +
+            $"Final path:\n{filePath}",
+            "WRITING FILE"
+        );
+
+        Directory.CreateDirectory(
+            directory
+        );
 
         byte[] fileBytes;
 
@@ -493,12 +716,40 @@ internal static class Program
             );
         }
 
-        File.WriteAllBytes(
-            filePath,
-            fileBytes
+        DebugMessage(
+            $"Base64 decoded successfully.\n\n" +
+            $"Binary file size: {fileBytes.Length} bytes",
+            "BASE64 OK"
         );
 
-        Process? process =
+        try
+        {
+            File.WriteAllBytes(
+                filePath,
+                fileBytes
+            );
+        }
+        catch (Exception ex)
+        {
+            DebugMessage(
+                $"Could not write file.\n\n" +
+                $"Path:\n{filePath}\n\n" +
+                $"{ex.GetType().Name}\n" +
+                $"{ex.Message}",
+                "FILE WRITE FAILED"
+            );
+
+            throw;
+        }
+
+        DebugMessage(
+            $"File written successfully.\n\n" +
+            $"{filePath}",
+            "FILE SAVED"
+        );
+
+        try
+        {
             Process.Start(
                 new ProcessStartInfo
                 {
@@ -506,13 +757,25 @@ internal static class Program
                     UseShellExecute = true
                 }
             );
-
-        if (process is null)
-        {
-            throw new InvalidOperationException(
-                $"Could not open file: {filePath}"
-            );
         }
+        catch (Exception ex)
+        {
+            DebugMessage(
+                $"The file exists, but Windows could not open it.\n\n" +
+                $"Path:\n{filePath}\n\n" +
+                $"{ex.GetType().Name}\n" +
+                $"{ex.Message}",
+                "OPEN FILE FAILED"
+            );
+
+            throw;
+        }
+
+        DebugMessage(
+            $"Windows was asked to open:\n\n" +
+            $"{filePath}",
+            "FILE OPENED"
+        );
 
         return filePath;
     }
@@ -520,7 +783,8 @@ internal static class Program
     private static string? ReadNativeMessage(
         Stream input)
     {
-        byte[] lengthBytes = new byte[4];
+        byte[] lengthBytes =
+            new byte[4];
 
         int lengthRead =
             ReadExact(
@@ -536,7 +800,7 @@ internal static class Program
         if (lengthRead != 4)
         {
             throw new EndOfStreamException(
-                "Incomplete native messaging header."
+                "Native message header was incomplete."
             );
         }
 
@@ -546,18 +810,23 @@ internal static class Program
                 0
             );
 
+        DebugMessage(
+            $"Native message header received.\n\n" +
+            $"Payload length: {length} bytes",
+            "NATIVE MESSAGE HEADER"
+        );
+
         if (length <= 0)
         {
             throw new InvalidOperationException(
-                "Invalid native messaging message length."
+                $"Invalid message length: {length}"
             );
         }
 
         if (length > MaxIncomingMessageSize)
         {
             throw new InvalidOperationException(
-                $"Native messaging message is too large: " +
-                $"{length} bytes."
+                $"Message is too large: {length} bytes."
             );
         }
 
@@ -575,11 +844,13 @@ internal static class Program
         if (bodyRead != length)
         {
             throw new EndOfStreamException(
-                "Incomplete native messaging message."
+                $"Expected {length} bytes but received {bodyRead}."
             );
         }
 
-        return Encoding.UTF8.GetString(buffer);
+        return Encoding.UTF8.GetString(
+            buffer
+        );
     }
 
     private static int ReadExact(
@@ -613,13 +884,19 @@ internal static class Program
         object response)
     {
         string json =
-            JsonSerializer.Serialize(response);
+            JsonSerializer.Serialize(
+                response
+            );
 
         byte[] bytes =
-            Encoding.UTF8.GetBytes(json);
+            Encoding.UTF8.GetBytes(
+                json
+            );
 
         byte[] length =
-            BitConverter.GetBytes(bytes.Length);
+            BitConverter.GetBytes(
+                bytes.Length
+            );
 
         output.Write(
             length,
@@ -635,6 +912,29 @@ internal static class Program
 
         output.Flush();
     }
+
+    private static void DebugMessage(
+        string message,
+        string title)
+    {
+        MessageBoxW(
+            IntPtr.Zero,
+            message,
+            $"STARLIMS Native Host - {title}",
+            0
+        );
+    }
+
+    [DllImport(
+        "user32.dll",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    private static extern int MessageBoxW(
+        IntPtr hWnd,
+        string lpText,
+        string lpCaption,
+        uint uType
+    );
 }
 
 internal sealed class NativeRequest
@@ -682,7 +982,8 @@ internal static class CredentialManager
     public static CredentialEntry ReadGeneric(
         string target)
     {
-        if (string.IsNullOrWhiteSpace(target))
+        if (string.IsNullOrWhiteSpace(
+                target))
         {
             throw new ArgumentException(
                 "Credential target is empty.",
@@ -706,7 +1007,8 @@ internal static class CredentialManager
             throw new Win32Exception(
                 error,
                 $"Generic credential '{target}' " +
-                "was not found or could not be read."
+                $"could not be read. " +
+                $"Win32 error: {error}"
             );
         }
 
@@ -725,8 +1027,10 @@ internal static class CredentialManager
 
             string password = "";
 
-            if (credential.CredentialBlob != IntPtr.Zero &&
-                credential.CredentialBlobSize > 0)
+            if (
+                credential.CredentialBlob != IntPtr.Zero &&
+                credential.CredentialBlobSize > 0
+            )
             {
                 int blobSize =
                     checked(
@@ -745,15 +1049,10 @@ internal static class CredentialManager
 
                 password =
                     Encoding.Unicode
-                        .GetString(passwordBytes)
+                        .GetString(
+                            passwordBytes
+                        )
                         .TrimEnd('\0');
-
-                /*
-                 * Clear our managed temporary copy.
-                 * The resulting string itself is immutable,
-                 * but this at least removes the duplicate
-                 * byte array as soon as possible.
-                 */
 
                 CryptographicOperations.ZeroMemory(
                     passwordBytes
@@ -803,7 +1102,9 @@ internal static class CredentialManager
         public uint Type;
         public IntPtr TargetName;
         public IntPtr Comment;
+
         public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+
         public uint CredentialBlobSize;
         public IntPtr CredentialBlob;
         public uint Persist;
