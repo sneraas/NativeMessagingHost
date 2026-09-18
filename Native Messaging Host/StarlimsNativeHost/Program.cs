@@ -31,7 +31,7 @@ while (true)
             request.Secret
         );
 
-        if (result.FileAction == "readwrite")
+        if (result.FileAction == "read")
         {
             string filePath = SaveAndOpen(result);
 
@@ -39,6 +39,20 @@ while (true)
             {
                 ok = true,
                 filePath
+            });
+        }
+        else if (result.FileAction == "readwrite")
+        {
+                string base64Path = await SaveOpenAndWatchAsync(
+                result,
+                request.Token
+            );
+        
+            WriteResponse(output, new
+            {
+                ok = true,
+                fileAction = result.FileAction,
+                base64Path
             });
         }
         else
@@ -57,7 +71,241 @@ while (true)
         });
     }
 }
+static async Task<string> SaveOpenAndWatchAsync(
+    ApiResult result,
+    string token)
+{
+    if (string.IsNullOrWhiteSpace(token))
+        throw new Exception("Token is missing.");
 
+    if (token.Any(c => !char.IsLetterOrDigit(c)))
+        throw new Exception("Token contains invalid path characters.");
+
+    string folder = Path.Combine(
+        result.ClientFilePath,
+        token
+    );
+
+    Directory.CreateDirectory(folder);
+
+    string fileName = Path.GetFileName(result.FileName);
+
+    string filePath = Path.Combine(
+        folder,
+        fileName
+    );
+
+    string base64Path =
+        filePath + ".base64.txt";
+
+    byte[] bytes =
+        Convert.FromBase64String(
+            result.FileData
+        );
+
+    File.WriteAllBytes(
+        filePath,
+        bytes
+    );
+
+    DateTime lastEncodedWriteTime =
+        File.GetLastWriteTimeUtc(filePath);
+
+    WriteBase64Snapshot(
+        filePath,
+        base64Path
+    );
+
+    Process.Start(
+        new ProcessStartInfo
+        {
+            FileName = filePath,
+            UseShellExecute = true
+        }
+    );
+
+    await WaitUntilFileIsOpenedAsync(
+        filePath
+    );
+
+    int closedChecks = 0;
+
+    while (closedChecks < 4)
+    {
+        await Task.Delay(500);
+
+        if (!File.Exists(filePath))
+        {
+            closedChecks = 0;
+            continue;
+        }
+
+        DateTime currentWriteTime =
+            File.GetLastWriteTimeUtc(
+                filePath
+            );
+
+        if (currentWriteTime != lastEncodedWriteTime)
+        {
+            if (TryWriteBase64Snapshot(
+                filePath,
+                base64Path
+            ))
+            {
+                lastEncodedWriteTime =
+                    currentWriteTime;
+            }
+        }
+
+        if (CanOpenExclusive(filePath))
+        {
+            closedChecks++;
+        }
+        else
+        {
+            closedChecks = 0;
+        }
+    }
+
+    /*
+     * File appears closed.
+     * Check one final time in case the final save happened
+     * immediately before the application released the file.
+     */
+    DateTime finalWriteTime =
+        File.GetLastWriteTimeUtc(
+            filePath
+        );
+
+    if (finalWriteTime != lastEncodedWriteTime)
+    {
+        WriteBase64Snapshot(
+            filePath,
+            base64Path
+        );
+    }
+
+    /*
+     * Only delete the original after the final Base64
+     * conversion completed successfully.
+     */
+    File.Delete(filePath);
+
+    return base64Path;
+}
+
+static async Task WaitUntilFileIsOpenedAsync(
+    string filePath)
+{
+    DateTime timeout =
+        DateTime.UtcNow.AddSeconds(30);
+
+    while (DateTime.UtcNow < timeout)
+    {
+        if (!CanOpenExclusive(filePath))
+            return;
+
+        await Task.Delay(250);
+    }
+
+    throw new Exception(
+        "Could not detect that the file was opened."
+    );
+}
+
+static bool CanOpenExclusive(
+    string filePath)
+{
+    try
+    {
+        using FileStream stream = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None
+        );
+
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+static bool TryWriteBase64Snapshot(
+    string filePath,
+    string base64Path)
+{
+    try
+    {
+        WriteBase64Snapshot(
+            filePath,
+            base64Path
+        );
+
+        return true;
+    }
+    catch (IOException)
+    {
+        return false;
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return false;
+    }
+}
+
+static void WriteBase64Snapshot(
+    string filePath,
+    string base64Path)
+{
+    byte[] bytes;
+
+    using (
+        FileStream stream = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete
+        )
+    )
+    {
+        bytes = new byte[stream.Length];
+
+        int totalRead = 0;
+
+        while (totalRead < bytes.Length)
+        {
+            int read = stream.Read(
+                bytes,
+                totalRead,
+                bytes.Length - totalRead
+            );
+
+            if (read == 0)
+                break;
+
+            totalRead += read;
+        }
+
+        if (totalRead != bytes.Length)
+        {
+            throw new IOException(
+                "Could not read complete file."
+            );
+        }
+    }
+
+    string base64 =
+        Convert.ToBase64String(bytes);
+
+    File.WriteAllText(
+        base64Path,
+        base64,
+        Encoding.UTF8
+    );
+}
 static async Task<ApiResult> CallApi(
     string token,
     string keyCredentialName,
