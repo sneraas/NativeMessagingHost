@@ -25,42 +25,41 @@ while (true)
             JsonSerializer.Deserialize<NativeRequest>(json)
             ?? throw new Exception("Invalid request.");
 
-        ApiResult result = await CallApi(
-            request.Token,
+        ApiConfig config = GetApiConfig(
             request.Key,
             request.Secret
         );
 
-        if (result.FileAction == "read")
-        {
-            string filePath = SaveAndOpen(result);
+        ApiResult result = await CallApi(
+            request.Token,
+            config
+        );
 
-            WriteResponse(output, new
-            {
-                ok = true,
-                filePath
-            });
-        }
-        else if (result.FileAction == "readwrite")
+        byte[] fileBytes = await DownloadFile(
+            result.DownloadUrl,
+            config
+        );
+
+        string filePath = SaveAndOpen(
+            result,
+            request.Token,
+            fileBytes
+        );
+
+        if (result.FileAction == "readwrite")
         {
-                string base64Path = await SaveOpenAndWatchAsync(
-                result,
-                request.Token
-            );
-        
-            WriteResponse(output, new
-            {
-                ok = true,
-                fileAction = result.FileAction,
-                base64Path
-            });
+            await WaitUntilOpened(filePath);
+            await WaitUntilClosed(filePath);
+
+            // Upload modified file to STARLIMS here later.
         }
-        else
+
+        WriteResponse(output, new
         {
-            throw new Exception(
-                $"Unsupported FILE_ACTION: {result.FileAction}"
-            );
-        }
+            ok = true,
+            fileAction = result.FileAction,
+            filePath
+        });
     }
     catch (Exception ex)
     {
@@ -71,243 +70,8 @@ while (true)
         });
     }
 }
-static async Task<string> SaveOpenAndWatchAsync(
-    ApiResult result,
-    string token)
-{
-    if (string.IsNullOrWhiteSpace(token))
-        throw new Exception("Token is missing.");
 
-    if (token.Any(c => !char.IsLetterOrDigit(c)))
-        throw new Exception("Token contains invalid path characters.");
-
-    string folder = Path.Combine(
-        result.ClientFilePath,
-        token
-    );
-
-    Directory.CreateDirectory(folder);
-
-    string fileName = Path.GetFileName(result.FileName);
-
-    string filePath = Path.Combine(
-        folder,
-        fileName
-    );
-
-    string base64Path =
-        filePath + ".base64.txt";
-
-    byte[] bytes =
-        Convert.FromBase64String(
-            result.FileData
-        );
-
-    File.WriteAllBytes(
-        filePath,
-        bytes
-    );
-
-    DateTime lastEncodedWriteTime =
-        File.GetLastWriteTimeUtc(filePath);
-
-    WriteBase64Snapshot(
-        filePath,
-        base64Path
-    );
-
-    Process.Start(
-        new ProcessStartInfo
-        {
-            FileName = filePath,
-            UseShellExecute = true
-        }
-    );
-
-    await WaitUntilFileIsOpenedAsync(
-        filePath
-    );
-
-    int closedChecks = 0;
-
-    while (closedChecks < 4)
-    {
-        await Task.Delay(500);
-
-        if (!File.Exists(filePath))
-        {
-            closedChecks = 0;
-            continue;
-        }
-
-        DateTime currentWriteTime =
-            File.GetLastWriteTimeUtc(
-                filePath
-            );
-
-        if (currentWriteTime != lastEncodedWriteTime)
-        {
-            if (TryWriteBase64Snapshot(
-                filePath,
-                base64Path
-            ))
-            {
-                lastEncodedWriteTime =
-                    currentWriteTime;
-            }
-        }
-
-        if (CanOpenExclusive(filePath))
-        {
-            closedChecks++;
-        }
-        else
-        {
-            closedChecks = 0;
-        }
-    }
-
-    /*
-     * File appears closed.
-     * Check one final time in case the final save happened
-     * immediately before the application released the file.
-     */
-    DateTime finalWriteTime =
-        File.GetLastWriteTimeUtc(
-            filePath
-        );
-
-    if (finalWriteTime != lastEncodedWriteTime)
-    {
-        WriteBase64Snapshot(
-            filePath,
-            base64Path
-        );
-    }
-
-    /*
-     * Only delete the original after the final Base64
-     * conversion completed successfully.
-     */
-    File.Delete(filePath);
-
-    return base64Path;
-}
-
-static async Task WaitUntilFileIsOpenedAsync(
-    string filePath)
-{
-    DateTime timeout =
-        DateTime.UtcNow.AddSeconds(30);
-
-    while (DateTime.UtcNow < timeout)
-    {
-        if (!CanOpenExclusive(filePath))
-            return;
-
-        await Task.Delay(250);
-    }
-
-    throw new Exception(
-        "Could not detect that the file was opened."
-    );
-}
-
-static bool CanOpenExclusive(
-    string filePath)
-{
-    try
-    {
-        using FileStream stream = new(
-            filePath,
-            FileMode.Open,
-            FileAccess.ReadWrite,
-            FileShare.None
-        );
-
-        return true;
-    }
-    catch
-    {
-        return false;
-    }
-}
-
-static bool TryWriteBase64Snapshot(
-    string filePath,
-    string base64Path)
-{
-    try
-    {
-        WriteBase64Snapshot(
-            filePath,
-            base64Path
-        );
-
-        return true;
-    }
-    catch (IOException)
-    {
-        return false;
-    }
-    catch (UnauthorizedAccessException)
-    {
-        return false;
-    }
-}
-
-static void WriteBase64Snapshot(
-    string filePath,
-    string base64Path)
-{
-    byte[] bytes;
-
-    using (
-        FileStream stream = new(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete
-        )
-    )
-    {
-        bytes = new byte[stream.Length];
-
-        int totalRead = 0;
-
-        while (totalRead < bytes.Length)
-        {
-            int read = stream.Read(
-                bytes,
-                totalRead,
-                bytes.Length - totalRead
-            );
-
-            if (read == 0)
-                break;
-
-            totalRead += read;
-        }
-
-        if (totalRead != bytes.Length)
-        {
-            throw new IOException(
-                "Could not read complete file."
-            );
-        }
-    }
-
-    string base64 =
-        Convert.ToBase64String(bytes);
-
-    File.WriteAllText(
-        base64Path,
-        base64,
-        Encoding.UTF8
-    );
-}
-static async Task<ApiResult> CallApi(
-    string token,
+static ApiConfig GetApiConfig(
     string keyCredentialName,
     string secretCredentialName)
 {
@@ -330,56 +94,32 @@ static async Task<ApiResult> CallApi(
     string environment =
         keyCredential.UserName.ToUpperInvariant();
 
-    string accessKey =
-        keyCredential.Password;
-
-    string secretKey =
-        secretCredential.Password;
-
-    string baseUrl = environment switch
+    string apiRoot = environment switch
     {
         "DEV" =>
             "https://rhs-limsapou-83.ad.ous-hf.no/" +
-            "STARLIMS.DEV/rest.web.api/v1/Folders/SendDocumentToClient",
+            "STARLIMS.DEV/rest.web.api/",
 
         _ => throw new Exception(
             $"Unknown environment: {environment}"
         )
     };
 
+    return new ApiConfig(
+        apiRoot,
+        keyCredential.Password,
+        secretCredential.Password
+    );
+}
+
+static async Task<ApiResult> CallApi(
+    string token,
+    ApiConfig config)
+{
     string url =
-        $"{baseUrl}?token={WebUtility.UrlEncode(token)}";
-
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
-
-    string stringToSign =
-        $"{url}\n" +
-        $"GET\n" +
-        $"{accessKey}\n" +
-        $"\n" +
-        $"{timestamp}\n" +
-        $"\n";
-
-    string signature;
-
-    using (HMACSHA256 hmac =
-        new(Encoding.UTF8.GetBytes(secretKey)))
-    {
-        signature =
-            WebUtility.UrlEncode(
-                Convert.ToBase64String(
-                    hmac.ComputeHash(
-                        Encoding.UTF8.GetBytes(
-                            stringToSign
-                        )
-                    )
-                )
-            );
-    }
+        config.ApiRoot +
+        "v1/Folders/SendDocumentToClient" +
+        $"?token={WebUtility.UrlEncode(token)}";
 
     using HttpClientHandler handler = new()
     {
@@ -389,42 +129,22 @@ static async Task<ApiResult> CallApi(
     using HttpClient client =
         new(handler);
 
-    using HttpRequestMessage httpRequest =
-        new(HttpMethod.Get, url);
-
-    httpRequest.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
+    using HttpRequestMessage request =
+        CreateRequest(
+            HttpMethod.Get,
+            url,
+            "application/json",
+            config
         );
 
-    httpRequest.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
-            "application/json"
-        );
-
-    httpRequest.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        accessKey
-    );
-
-    httpRequest.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
-
-    httpRequest.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
-    );
-
-    httpRequest.Headers.Accept.Add(
+    request.Headers.Accept.Add(
         new MediaTypeWithQualityHeaderValue(
             "application/json"
         )
     );
 
     using HttpResponseMessage response =
-        await client.SendAsync(httpRequest);
+        await client.SendAsync(request);
 
     string body =
         await response.Content.ReadAsStringAsync();
@@ -448,29 +168,201 @@ static async Task<ApiResult> CallApi(
         );
 }
 
-static string SaveAndOpen(
-    ApiResult result)
+static async Task<byte[]> DownloadFile(
+    string downloadUrl,
+    ApiConfig config)
 {
+    if (string.IsNullOrWhiteSpace(downloadUrl))
+        throw new Exception("DOWNLOAD_URL is missing.");
+
+    Uri url;
+
+    if (Uri.TryCreate(
+        downloadUrl,
+        UriKind.Absolute,
+        out Uri? absoluteUrl))
+    {
+        url = absoluteUrl;
+    }
+    else
+    {
+        url = new Uri(
+            new Uri(config.ApiRoot),
+            downloadUrl
+        );
+    }
+
+    using HttpClientHandler handler = new()
+    {
+        UseDefaultCredentials = true
+    };
+
+    using HttpClient client =
+        new(handler);
+
+    using HttpRequestMessage request =
+        CreateRequest(
+            HttpMethod.Get,
+            url.AbsoluteUri,
+            "text/plain",
+            config
+        );
+
+    using HttpResponseMessage response =
+        await client.SendAsync(request);
+
+    if (!response.IsSuccessStatusCode)
+    {
+        string error =
+            await response.Content.ReadAsStringAsync();
+
+        throw new Exception(
+            $"Download returned {(int)response.StatusCode}: {error}"
+        );
+    }
+
+    return await response.Content.ReadAsByteArrayAsync();
+}
+
+static HttpRequestMessage CreateRequest(
+    HttpMethod method,
+    string url,
+    string contentType,
+    ApiConfig config)
+{
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture
+        );
+
+    string stringToSign =
+        $"{url}\n" +
+        $"{method.Method}\n" +
+        $"{config.AccessKey}\n" +
+        $"\n" +
+        $"{timestamp}\n" +
+        $"\n";
+
+    string signature;
+
+    using (HMACSHA256 hmac =
+        new(
+            Encoding.UTF8.GetBytes(
+                config.SecretKey
+            )
+        ))
+    {
+        byte[] hash =
+            hmac.ComputeHash(
+                Encoding.UTF8.GetBytes(
+                    stringToSign
+                )
+            );
+
+        signature =
+            WebUtility.UrlEncode(
+                Convert.ToBase64String(hash)
+            );
+    }
+
+    HttpRequestMessage request =
+        new(method, url);
+
+    request.Content =
+        new ByteArrayContent(
+            Array.Empty<byte>()
+        );
+
+    request.Content.Headers.ContentType =
+        new MediaTypeHeaderValue(
+            contentType
+        );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Auth",
+        config.AccessKey
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Signature",
+        signature
+    );
+
+    return request;
+}
+
+static string SaveAndOpen(
+    ApiResult result,
+    string token,
+    byte[] fileBytes)
+{
+    if (string.IsNullOrWhiteSpace(
+        result.ClientFilePath))
+    {
+        throw new Exception(
+            "CLIENT_FILE_PATH is missing."
+        );
+    }
+
+    if (string.IsNullOrWhiteSpace(
+        result.FileName))
+    {
+        throw new Exception(
+            "FILE_NAME is missing."
+        );
+    }
+
+    string folder;
+
+    if (result.FileAction == "readwrite")
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw new Exception("Token is missing.");
+
+        if (token.Any(
+            c => !char.IsLetterOrDigit(c)))
+        {
+            throw new Exception(
+                "Token contains invalid path characters."
+            );
+        }
+
+        folder = Path.Combine(
+            result.ClientFilePath,
+            token
+        );
+    }
+    else if (result.FileAction == "read")
+    {
+        folder =
+            result.ClientFilePath;
+    }
+    else
+    {
+        throw new Exception(
+            $"Unsupported FILE_ACTION: {result.FileAction}"
+        );
+    }
+
+    Directory.CreateDirectory(folder);
+
     string filePath =
         Path.Combine(
-            result.ClientFilePath,
+            folder,
             Path.GetFileName(
                 result.FileName
             )
         );
 
-    Directory.CreateDirectory(
-        result.ClientFilePath
-    );
-
-    byte[] bytes =
-        Convert.FromBase64String(
-            result.FileData
-        );
-
     File.WriteAllBytes(
         filePath,
-        bytes
+        fileBytes
     );
 
     Process.Start(
@@ -484,10 +376,70 @@ static string SaveAndOpen(
     return filePath;
 }
 
+static async Task WaitUntilOpened(
+    string filePath)
+{
+    DateTime timeout =
+        DateTime.UtcNow.AddSeconds(30);
+
+    while (DateTime.UtcNow < timeout)
+    {
+        if (!CanOpenExclusive(filePath))
+            return;
+
+        await Task.Delay(500);
+    }
+
+    throw new Exception(
+        "Could not detect that the file was opened."
+    );
+}
+
+static async Task WaitUntilClosed(
+    string filePath)
+{
+    int closedChecks = 0;
+
+    while (closedChecks < 4)
+    {
+        await Task.Delay(500);
+
+        if (CanOpenExclusive(filePath))
+        {
+            closedChecks++;
+        }
+        else
+        {
+            closedChecks = 0;
+        }
+    }
+}
+
+static bool CanOpenExclusive(
+    string filePath)
+{
+    try
+    {
+        using FileStream stream =
+            new(
+                filePath,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None
+            );
+
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
 static Credential ReadCredential(
     string target)
 {
-    if (!CredReadW(
+    if (!NativeMethods.CredReadW(
         target,
         1,
         0,
@@ -535,7 +487,7 @@ static Credential ReadCredential(
     }
     finally
     {
-        CredFree(pointer);
+        NativeMethods.CredFree(pointer);
     }
 }
 
@@ -614,36 +566,33 @@ static void WriteResponse(
             data.Length
         );
 
-    output.Write(
-        length
-    );
-
-    output.Write(
-        data
-    );
-
+    output.Write(length);
+    output.Write(data);
     output.Flush();
 }
 
-[DllImport(
-    "Advapi32.dll",
-    EntryPoint = "CredReadW",
-    CharSet = CharSet.Unicode,
-    SetLastError = true)]
-[return: MarshalAs(UnmanagedType.Bool)]
-static extern bool CredReadW(
-    string target,
-    uint type,
-    uint flags,
-    out IntPtr credential
-);
+static class NativeMethods
+{
+    [DllImport(
+        "Advapi32.dll",
+        EntryPoint = "CredReadW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CredReadW(
+        string target,
+        uint type,
+        uint flags,
+        out IntPtr credential
+    );
 
-[DllImport(
-    "Advapi32.dll",
-    EntryPoint = "CredFree")]
-static extern void CredFree(
-    IntPtr buffer
-);
+    [DllImport(
+        "Advapi32.dll",
+        EntryPoint = "CredFree")]
+    public static extern void CredFree(
+        IntPtr buffer
+    );
+}
 
 [StructLayout(
     LayoutKind.Sequential,
@@ -654,7 +603,10 @@ struct NativeCredential
     public uint Type;
     public IntPtr TargetName;
     public IntPtr Comment;
-    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+
+    public System.Runtime.InteropServices.ComTypes.FILETIME
+        LastWritten;
+
     public uint CredentialBlobSize;
     public IntPtr CredentialBlob;
     public uint Persist;
@@ -667,6 +619,12 @@ struct NativeCredential
 sealed record Credential(
     string UserName,
     string Password
+);
+
+sealed record ApiConfig(
+    string ApiRoot,
+    string AccessKey,
+    string SecretKey
 );
 
 sealed class NativeRequest
@@ -698,6 +656,6 @@ sealed class ApiResult
     [JsonPropertyName("FILE_NAME")]
     public string FileName { get; set; } = "";
 
-    [JsonPropertyName("FILE_DATA")]
-    public string FileData { get; set; } = "";
+    [JsonPropertyName("DOWNLOAD_URL")]
+    public string DownloadUrl { get; set; } = "";
 }
