@@ -31,18 +31,9 @@ while (true)
             request.Secret
         );
 
-        byte[] fileBytes = await DownloadFile(
-            result.DownloadUrl,
-            request.Key,
-            request.Secret
-        );
-
         if (result.FileAction == "read")
         {
-            string filePath = SaveAndOpen(
-                result,
-                fileBytes
-            );
+            string filePath = SaveAndOpen(result);
 
             WriteResponse(output, new
             {
@@ -55,7 +46,8 @@ while (true)
             string filePath = await SaveOpenAndWatchAsync(
                 result,
                 request.Token,
-                fileBytes
+                request.Key,
+                request.Secret
             );
 
             WriteResponse(output, new
@@ -86,7 +78,8 @@ while (true)
 static async Task<string> SaveOpenAndWatchAsync(
     ApiResult result,
     string token,
-    byte[] fileBytes)
+    string keyCredentialName,
+    string secretCredentialName)
 {
     if (string.IsNullOrWhiteSpace(token))
         throw new Exception("Token is missing.");
@@ -103,15 +96,29 @@ static async Task<string> SaveOpenAndWatchAsync(
 
     Directory.CreateDirectory(folder);
 
-    string filePath = Path.Combine(
-        folder,
-        Path.GetFileName(result.FileName)
-    );
+    string fileName =
+        Path.GetFileName(result.FileName);
+
+    string filePath =
+        Path.Combine(
+            folder,
+            fileName
+        );
+
+    byte[] bytes =
+        Convert.FromBase64String(
+            result.FileData
+        );
 
     File.WriteAllBytes(
         filePath,
-        fileBytes
+        bytes
     );
+
+    DateTime lastSentWriteTime =
+        File.GetLastWriteTimeUtc(
+            filePath
+        );
 
     Process.Start(
         new ProcessStartInfo
@@ -131,6 +138,30 @@ static async Task<string> SaveOpenAndWatchAsync(
     {
         await Task.Delay(500);
 
+        if (!File.Exists(filePath))
+        {
+            closedChecks = 0;
+            continue;
+        }
+
+        DateTime currentWriteTime =
+            File.GetLastWriteTimeUtc(
+                filePath
+            );
+
+        if (currentWriteTime != lastSentWriteTime)
+        {
+            await SendFileToApi(
+                filePath,
+                token,
+                keyCredentialName,
+                secretCredentialName
+            );
+
+            lastSentWriteTime =
+                currentWriteTime;
+        }
+
         if (CanOpenExclusive(filePath))
         {
             closedChecks++;
@@ -141,7 +172,233 @@ static async Task<string> SaveOpenAndWatchAsync(
         }
     }
 
+    DateTime finalWriteTime =
+        File.GetLastWriteTimeUtc(
+            filePath
+        );
+
+    if (finalWriteTime != lastSentWriteTime)
+    {
+        await SendFileToApi(
+            filePath,
+            token,
+            keyCredentialName,
+            secretCredentialName
+        );
+    }
+
+    File.Delete(filePath);
+
     return filePath;
+}
+
+
+static async Task SendFileToApi(
+    string filePath,
+    string token,
+    string keyCredentialName,
+    string secretCredentialName)
+{
+    Credential keyCredential =
+        ReadCredential(
+            keyCredentialName
+        );
+
+    Credential secretCredential =
+        ReadCredential(
+            secretCredentialName
+        );
+
+    if (!string.Equals(
+        keyCredential.UserName,
+        secretCredential.UserName,
+        StringComparison.OrdinalIgnoreCase))
+    {
+        throw new Exception(
+            "API key and secret belong to different environments."
+        );
+    }
+
+    string environment =
+        keyCredential.UserName
+            .ToUpperInvariant();
+
+    string accessKey =
+        keyCredential.Password;
+
+    string secretKey =
+        secretCredential.Password;
+
+    string url = environment switch
+    {
+        "DEV" =>
+            "https://rhs-limsapou-83.ad.ous-hf.no/" +
+            "STARLIMS.DEV/rest.web.api/v1/Folders/GetDocumentFromClient",
+
+        _ => throw new Exception(
+            $"Unknown environment: {environment}"
+        )
+    };
+
+    string base64 =
+        ReadFileAsBase64(
+            filePath
+        );
+
+    string payload =
+        JsonSerializer.Serialize(
+            new
+            {
+                token,
+                file = base64
+            }
+        );
+
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture
+        );
+
+    string stringToSign =
+        $"{url}\n" +
+        $"POST\n" +
+        $"{accessKey}\n" +
+        $"\n" +
+        $"{timestamp}\n" +
+        $"{payload}";
+
+    string signature;
+
+    using (HMACSHA256 hmac =
+        new(
+            Encoding.UTF8.GetBytes(
+                secretKey
+            )
+        ))
+    {
+        signature =
+            WebUtility.UrlEncode(
+                Convert.ToBase64String(
+                    hmac.ComputeHash(
+                        Encoding.UTF8.GetBytes(
+                            stringToSign
+                        )
+                    )
+                )
+            );
+    }
+
+    using HttpClientHandler handler =
+        new()
+        {
+            UseDefaultCredentials = true
+        };
+
+    using HttpClient client =
+        new(handler);
+
+    using HttpRequestMessage request =
+        new(
+            HttpMethod.Post,
+            url
+        );
+
+    byte[] payloadBytes =
+        Encoding.UTF8.GetBytes(
+            payload
+        );
+
+    request.Content =
+        new ByteArrayContent(
+            payloadBytes
+        );
+
+    request.Content.Headers.ContentType =
+        new MediaTypeHeaderValue(
+            "application/json"
+        );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Auth",
+        accessKey
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Signature",
+        signature
+    );
+
+    using HttpResponseMessage response =
+        await client.SendAsync(
+            request
+        );
+
+    string body =
+        await response.Content
+            .ReadAsStringAsync();
+
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new Exception(
+            $"Upload API returned {(int)response.StatusCode}: {body}"
+        );
+    }
+}
+
+
+static string ReadFileAsBase64(
+    string filePath)
+{
+    byte[] bytes;
+
+    using (
+        FileStream stream = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite |
+            FileShare.Delete
+        )
+    )
+    {
+        bytes =
+            new byte[stream.Length];
+
+        int totalRead = 0;
+
+        while (totalRead < bytes.Length)
+        {
+            int read =
+                stream.Read(
+                    bytes,
+                    totalRead,
+                    bytes.Length -
+                    totalRead
+                );
+
+            if (read == 0)
+                break;
+
+            totalRead += read;
+        }
+
+        if (totalRead != bytes.Length)
+        {
+            throw new IOException(
+                "Could not read complete file."
+            );
+        }
+    }
+
+    return Convert.ToBase64String(
+        bytes
+    );
 }
 
 
@@ -170,12 +427,13 @@ static bool CanOpenExclusive(
 {
     try
     {
-        using FileStream stream = new(
-            filePath,
-            FileMode.Open,
-            FileAccess.ReadWrite,
-            FileShare.None
-        );
+        using FileStream stream =
+            new(
+                filePath,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None
+            );
 
         return true;
     }
@@ -188,264 +446,6 @@ static bool CanOpenExclusive(
 
 static async Task<ApiResult> CallApi(
     string token,
-    string keyCredentialName,
-    string secretCredentialName)
-{
-    ApiCredentials credentials =
-        GetApiCredentials(
-            keyCredentialName,
-            secretCredentialName
-        );
-
-    string baseUrl =
-        credentials.Environment switch
-        {
-            "DEV" =>
-                "https://rhs-limsapou-83.ad.ous-hf.no/" +
-                "STARLIMS.DEV/rest.web.api/v1/Folders/SendDocumentToClient",
-
-            _ => throw new Exception(
-                $"Unknown environment: {credentials.Environment}"
-            )
-        };
-
-    string url =
-        $"{baseUrl}?token={WebUtility.UrlEncode(token)}";
-
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
-
-    string signature =
-        ComputeSignature(
-            url,
-            "GET",
-            credentials.AccessKey,
-            timestamp,
-            credentials.SecretKey
-        );
-
-    using HttpClientHandler handler = new()
-    {
-        UseDefaultCredentials = true
-    };
-
-    using HttpClient client =
-        new(handler);
-
-    using HttpRequestMessage request =
-        new(HttpMethod.Get, url);
-
-    request.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
-        );
-
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
-            "application/json"
-        );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        credentials.AccessKey
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
-    );
-
-    request.Headers.Accept.Add(
-        new MediaTypeWithQualityHeaderValue(
-            "application/json"
-        )
-    );
-
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
-
-    string body =
-        await response.Content.ReadAsStringAsync();
-
-    if (!response.IsSuccessStatusCode)
-    {
-        throw new Exception(
-            $"API returned {(int)response.StatusCode}: {body}"
-        );
-    }
-
-    ApiResponse apiResponse =
-        JsonSerializer.Deserialize<ApiResponse>(body)
-        ?? throw new Exception(
-            "Invalid API response."
-        );
-
-    return apiResponse.Result.FirstOrDefault()
-        ?? throw new Exception(
-            "API returned no result."
-        );
-}
-
-
-static async Task<byte[]> DownloadFile(
-    string downloadUrl,
-    string keyCredentialName,
-    string secretCredentialName)
-{
-    if (string.IsNullOrWhiteSpace(downloadUrl))
-    {
-        throw new Exception(
-            "DOWNLOAD_URL is missing."
-        );
-    }
-
-    ApiCredentials credentials =
-        GetApiCredentials(
-            keyCredentialName,
-            secretCredentialName
-        );
-
-    string apiRoot =
-        credentials.Environment switch
-        {
-            "DEV" =>
-                "https://rhs-limsapou-83.ad.ous-hf.no/" +
-                "STARLIMS.DEV/rest.web.api/",
-
-            _ => throw new Exception(
-                $"Unknown environment: {credentials.Environment}"
-            )
-        };
-
-    string url;
-
-    if (Uri.TryCreate(
-        downloadUrl,
-        UriKind.Absolute,
-        out Uri? absoluteUri))
-    {
-        url = absoluteUri.AbsoluteUri;
-    }
-    else
-    {
-        url = new Uri(
-            new Uri(apiRoot),
-            downloadUrl
-        ).AbsoluteUri;
-    }
-
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
-
-    string signature =
-        ComputeSignature(
-            url,
-            "GET",
-            credentials.AccessKey,
-            timestamp,
-            credentials.SecretKey
-        );
-
-    using HttpClientHandler handler = new()
-    {
-        UseDefaultCredentials = true
-    };
-
-    using HttpClient client =
-        new(handler);
-
-    using HttpRequestMessage request =
-        new(HttpMethod.Get, url);
-
-    request.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
-        );
-
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
-            "text/plain"
-        );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        credentials.AccessKey
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
-    );
-
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
-
-    if (!response.IsSuccessStatusCode)
-    {
-        string body =
-            await response.Content.ReadAsStringAsync();
-
-        throw new Exception(
-            $"Download returned {(int)response.StatusCode}: {body}"
-        );
-    }
-
-    return await response.Content.ReadAsByteArrayAsync();
-}
-
-
-static string ComputeSignature(
-    string url,
-    string method,
-    string accessKey,
-    string timestamp,
-    string secretKey)
-{
-    string stringToSign =
-        $"{url}\n" +
-        $"{method}\n" +
-        $"{accessKey}\n" +
-        $"\n" +
-        $"{timestamp}\n" +
-        $"\n";
-
-    using HMACSHA256 hmac =
-        new(
-            Encoding.UTF8.GetBytes(
-                secretKey
-            )
-        );
-
-    byte[] hash =
-        hmac.ComputeHash(
-            Encoding.UTF8.GetBytes(
-                stringToSign
-            )
-        );
-
-    return WebUtility.UrlEncode(
-        Convert.ToBase64String(hash)
-    );
-}
-
-
-static ApiCredentials GetApiCredentials(
     string keyCredentialName,
     string secretCredentialName)
 {
@@ -469,17 +469,145 @@ static ApiCredentials GetApiCredentials(
         );
     }
 
-    return new ApiCredentials(
-        keyCredential.UserName.ToUpperInvariant(),
-        keyCredential.Password,
-        secretCredential.Password
+    string environment =
+        keyCredential.UserName
+            .ToUpperInvariant();
+
+    string accessKey =
+        keyCredential.Password;
+
+    string secretKey =
+        secretCredential.Password;
+
+    string baseUrl = environment switch
+    {
+        "DEV" =>
+            "https://rhs-limsapou-83.ad.ous-hf.no/" +
+            "STARLIMS.DEV/rest.web.api/v1/Folders/SendDocumentToClient",
+
+        _ => throw new Exception(
+            $"Unknown environment: {environment}"
+        )
+    };
+
+    string url =
+        $"{baseUrl}?token={WebUtility.UrlEncode(token)}";
+
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture
+        );
+
+    string stringToSign =
+        $"{url}\n" +
+        $"GET\n" +
+        $"{accessKey}\n" +
+        $"\n" +
+        $"{timestamp}\n" +
+        $"\n";
+
+    string signature;
+
+    using (HMACSHA256 hmac =
+        new(
+            Encoding.UTF8.GetBytes(
+                secretKey
+            )
+        ))
+    {
+        signature =
+            WebUtility.UrlEncode(
+                Convert.ToBase64String(
+                    hmac.ComputeHash(
+                        Encoding.UTF8.GetBytes(
+                            stringToSign
+                        )
+                    )
+                )
+            );
+    }
+
+    using HttpClientHandler handler =
+        new()
+        {
+            UseDefaultCredentials = true
+        };
+
+    using HttpClient client =
+        new(handler);
+
+    using HttpRequestMessage httpRequest =
+        new(
+            HttpMethod.Get,
+            url
+        );
+
+    httpRequest.Content =
+        new ByteArrayContent(
+            Array.Empty<byte>()
+        );
+
+    httpRequest.Content.Headers.ContentType =
+        new MediaTypeHeaderValue(
+            "application/json"
+        );
+
+    httpRequest.Headers.TryAddWithoutValidation(
+        "SL-API-Auth",
+        accessKey
     );
+
+    httpRequest.Headers.TryAddWithoutValidation(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    httpRequest.Headers.TryAddWithoutValidation(
+        "SL-API-Signature",
+        signature
+    );
+
+    httpRequest.Headers.Accept.Add(
+        new MediaTypeWithQualityHeaderValue(
+            "application/json"
+        )
+    );
+
+    using HttpResponseMessage response =
+        await client.SendAsync(
+            httpRequest
+        );
+
+    string body =
+        await response.Content
+            .ReadAsStringAsync();
+
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new Exception(
+            $"API returned {(int)response.StatusCode}: {body}"
+        );
+    }
+
+    ApiResponse apiResponse =
+        JsonSerializer.Deserialize<ApiResponse>(
+            body
+        )
+        ?? throw new Exception(
+            "Invalid API response."
+        );
+
+    return apiResponse.Result
+               .FirstOrDefault()
+        ?? throw new Exception(
+            "API returned no result."
+        );
 }
 
 
 static string SaveAndOpen(
-    ApiResult result,
-    byte[] fileBytes)
+    ApiResult result)
 {
     string filePath =
         Path.Combine(
@@ -493,9 +621,14 @@ static string SaveAndOpen(
         result.ClientFilePath
     );
 
+    byte[] bytes =
+        Convert.FromBase64String(
+            result.FileData
+        );
+
     File.WriteAllBytes(
         filePath,
-        fileBytes
+        bytes
     );
 
     Process.Start(
@@ -643,14 +776,8 @@ static void WriteResponse(
             data.Length
         );
 
-    output.Write(
-        length
-    );
-
-    output.Write(
-        data
-    );
-
+    output.Write(length);
+    output.Write(data);
     output.Flush();
 }
 
@@ -703,13 +830,6 @@ sealed record Credential(
 );
 
 
-sealed record ApiCredentials(
-    string Environment,
-    string AccessKey,
-    string SecretKey
-);
-
-
 sealed class NativeRequest
 {
     [JsonPropertyName("token")]
@@ -741,6 +861,6 @@ sealed class ApiResult
     [JsonPropertyName("FILE_NAME")]
     public string FileName { get; set; } = "";
 
-    [JsonPropertyName("DOWNLOAD_URL")]
-    public string DownloadUrl { get; set; } = "";
+    [JsonPropertyName("FILE_DATA")]
+    public string FileData { get; set; } = "";
 }
