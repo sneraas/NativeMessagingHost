@@ -12,6 +12,20 @@ using System.Text.Json.Serialization;
 using Stream input = Console.OpenStandardInput();
 using Stream output = Console.OpenStandardOutput();
 
+      // Create a string array with the lines of text
+        string[] lines = {dateValue.ToString("MM/dd/yyyy hh:mm:ss.fff tt") };
+
+        // Set a variable to the Documents path.
+        string docPath =
+          Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+        // Write the string array to a new file named "WriteLines.txt".
+        using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines.txt")))
+        {
+            foreach (string line in lines)
+                outputFile.WriteLine(line);
+        }
+
 while (true)
 {
     try
@@ -131,7 +145,18 @@ static async Task<string> SaveOpenAndWatchAsync(
     await WaitUntilFileIsOpenedAsync(
         filePath
     );
+            string[] lines = {dateValue.ToString("MM/dd/yyyy hh:mm:ss.fff tt") };
 
+        // Set a variable to the Documents path.
+        string docPath =
+          Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+        // Write the string array to a new file named "WriteLines.txt".
+        using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines.txt")))
+        {
+            foreach (string line in lines)
+                outputFile.WriteLine(line);
+        }
     int closedChecks = 0;
 
     while (closedChecks < 4)
