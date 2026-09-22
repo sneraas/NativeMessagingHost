@@ -9,480 +9,808 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-using Stream input = Console.OpenStandardInput();
-using Stream output = Console.OpenStandardOutput();
-
-while (true)
+class Program
 {
-    try
+    static readonly HttpClient Client = CreateHttpClient();
+
+    static async Task Main()
     {
-        string? json = ReadMessage(input);
+        using Stream input = Console.OpenStandardInput();
+        using Stream output = Console.OpenStandardOutput();
 
-        if (json == null)
-            break;
-
-        Stamp("01_message_received");
-
-        NativeRequest request =
-            JsonSerializer.Deserialize<NativeRequest>(json)
-            ?? throw new Exception("Invalid request.");
-
-        ApiCredentials credentials =
-            GetCredentials(
-                request.Key,
-                request.Secret
-            );
-
-        ApiResult result =
-            await GetDocumentInfo(
-                request.Token,
-                credentials
-            );
-
-        Stamp("02_metadata_received");
-
-byte[] bytes = await DownloadFile(
-    result.DownloadUrl,
-    credentials
-);
-
-string filePath = Path.Combine(
-    result.ClientFilePath,
-    result.FileName
-);
-
-File.WriteAllBytes(
-    filePath,
-    bytes
-);
-
-Process.Start(
-    new ProcessStartInfo
-    {
-        FileName = filePath,
-        UseShellExecute = true
-    }
-);
-
-        Stamp("05_process_started");
-
-        WriteResponse(output, new
+        while (true)
         {
-            ok = true,
-            fileAction = result.FileAction,
-            filePath
-        });
-    }
-catch (Exception ex)
-{
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_ERROR.txt"
-        ),
-        ex.ToString()
-    );
+            try
+            {
+                string? json = ReadMessage(input);
 
-    WriteResponse(output, new
-    {
-        ok = false,
-        error = ex.Message
-    });
-}
-}
+                if (json == null)
+                    break;
 
+                Stamp("01_message_received");
 
-static async Task<ApiResult> GetDocumentInfo(
-    string token,
-    ApiCredentials credentials)
-{
-    string url =
-        "https://rhs-limsapou-83.ad.ous-hf.no/" +
-        "STARLIMS.DEV/rest.web.api/v1/Folders/SendDocumentToClient" +
-        $"?token={WebUtility.UrlEncode(token)}";
+                NativeRequest nativeRequest =
+                    JsonSerializer.Deserialize<NativeRequest>(json)
+                    ?? throw new Exception("Invalid request.");
 
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
+                ApiContext api = GetApiContext(
+                    nativeRequest.Key,
+                    nativeRequest.Secret
+                );
 
-    string signature =
-        ComputeSignature(
-            url,
-            "GET",
-            credentials.AccessKey,
-            timestamp,
-            "",
-            credentials.SecretKey
-        );
+                ApiResult result = await GetDocumentInfo(
+                    nativeRequest.Token,
+                    api
+                );
 
-    using HttpClientHandler handler = new()
-    {
-        UseDefaultCredentials = true
-    };
+                Stamp("02_metadata_received");
 
-    using HttpClient client = new(handler);
+                byte[] fileBytes = await DownloadFile(
+                    result.DownloadUrl,
+                    api
+                );
 
-    using HttpRequestMessage request =
-        new(HttpMethod.Get, url);
+                Stamp("03_binary_downloaded");
 
-    request.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
-        );
+                string filePath = SaveFile(
+                    result,
+                    nativeRequest.Token,
+                    fileBytes
+                );
 
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
-            "application/json"
-        );
+                Stamp("04_file_saved");
 
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        credentials.AccessKey
-    );
+                OpenFile(filePath);
 
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
+                Stamp("05_process_started");
 
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
-    );
+                if (result.FileAction == "readwrite")
+                {
+                    await WatchFile(
+                        filePath,
+                        nativeRequest.Token,
+                        api
+                    );
+                }
+                else if (result.FileAction != "read")
+                {
+                    throw new Exception(
+                        $"Unsupported FILE_ACTION: {result.FileAction}"
+                    );
+                }
 
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
+                WriteResponse(output, new
+                {
+                    ok = true,
+                    fileAction = result.FileAction,
+                    filePath
+                });
+            }
+            catch (Exception ex)
+            {
+                WriteError(ex);
 
-    string body =
-        await response.Content.ReadAsStringAsync();
-
-    if (!response.IsSuccessStatusCode)
-    {
-        throw new Exception(
-            $"Metadata API returned {(int)response.StatusCode}: {body}"
-        );
+                WriteResponse(output, new
+                {
+                    ok = false,
+                    error = ex.Message
+                });
+            }
+        }
     }
 
-    ApiResponse apiResponse =
-        JsonSerializer.Deserialize<ApiResponse>(body)
-        ?? throw new Exception(
-            "Invalid API response."
+
+    static async Task<ApiResult> GetDocumentInfo(
+        string token,
+        ApiContext api)
+    {
+        string url =
+            api.ApiRoot +
+            "v1/Folders/SendDocumentToClient" +
+            $"?token={WebUtility.UrlEncode(token)}";
+
+        using HttpRequestMessage request =
+            CreateSignedRequest(
+                HttpMethod.Get,
+                url,
+                "application/json",
+                "",
+                api
+            );
+
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue(
+                "application/json"
+            )
         );
 
-    return apiResponse.Result.FirstOrDefault()
-        ?? throw new Exception(
-            "API returned no result."
-        );
-}
+        using HttpResponseMessage response =
+            await Client.SendAsync(request);
+
+        string body =
+            await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception(
+                $"Metadata API returned {(int)response.StatusCode}: {body}"
+            );
+        }
+
+        ApiResponse apiResponse =
+            JsonSerializer.Deserialize<ApiResponse>(body)
+            ?? throw new Exception(
+                "Invalid API response."
+            );
+
+        return apiResponse.Result.FirstOrDefault()
+            ?? throw new Exception(
+                "API returned no result."
+            );
+    }
 
 
-static async Task<byte[]> DownloadFile(
-    string url,
-    ApiCredentials credentials)
-{
-    HttpWebRequest req =
-        WebRequest.CreateHttp(url);
+    static async Task<byte[]> DownloadFile(
+        string url,
+        ApiContext api)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            throw new Exception("URL is empty.");
 
-    req.Method = "GET";
-    req.ContentType = "text/plain";
+        using HttpRequestMessage request =
+            CreateSignedRequest(
+                HttpMethod.Get,
+                url,
+                "text/plain",
+                "",
+                api
+            );
 
-    req.Headers.Add(
-        "SL-API-Auth",
-        credentials.AccessKey
-    );
+        using HttpResponseMessage response =
+            await Client.SendAsync(request);
 
-    req.Headers.Add(
-        "SL-API-Timestamp",
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fffZ"
-        )
-    );
+        if (!response.IsSuccessStatusCode)
+        {
+            string body =
+                await response.Content.ReadAsStringAsync();
 
-    req.Headers.Add(
-        "SL-API-Signature",
-        ComputeSignature(
-            req,
-            "",
-            credentials.SecretKey
-        )
-    );
+            throw new Exception(
+                $"Download API returned {(int)response.StatusCode}: {body}"
+            );
+        }
 
-    using HttpWebResponse resp =
-        (HttpWebResponse)await req.GetResponseAsync();
-
-    using MemoryStream stream = new();
-
-    await resp.GetResponseStream()
-        .CopyToAsync(stream);
-
-    return stream.ToArray();
-}
+        return await response.Content
+            .ReadAsByteArrayAsync();
+    }
 
 
-static string SaveFile(
-    ApiResult result,
-    string token,
-    byte[] fileBytes)
-{
-    string folder =
-        result.FileAction == "readwrite"
-            ? Path.Combine(
+    static string SaveFile(
+        ApiResult result,
+        string token,
+        byte[] fileBytes)
+    {
+        string folder;
+
+        if (result.FileAction == "readwrite")
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                throw new Exception("Token is missing.");
+
+            if (token.Any(
+                c => !char.IsLetterOrDigit(c)))
+            {
+                throw new Exception(
+                    "Token contains invalid path characters."
+                );
+            }
+
+            folder = Path.Combine(
                 result.ClientFilePath,
                 token
-            )
-            : result.ClientFilePath;
+            );
+        }
+        else
+        {
+            folder =
+                result.ClientFilePath;
+        }
 
-    Directory.CreateDirectory(folder);
+        Directory.CreateDirectory(folder);
 
-    string filePath =
-        Path.Combine(
-            folder,
-            Path.GetFileName(
-                result.FileName
-            )
+        string filePath =
+            Path.Combine(
+                folder,
+                Path.GetFileName(
+                    result.FileName
+                )
+            );
+
+        File.WriteAllBytes(
+            filePath,
+            fileBytes
         );
 
-    File.WriteAllBytes(
-        filePath,
-        fileBytes
-    );
-
-    return filePath;
-}
+        return filePath;
+    }
 
 
-static string ComputeSignature(
-    HttpWebRequest req,
-    string payload,
-    string secretKey)
-{
-    string data = string.Format(
-        "{0}\n{1}\n{2}\n{3}\n{4}\n{5}",
-        req.RequestUri.AbsoluteUri,
-        req.Method,
-        req.Headers["SL-API-Auth"],
-        req.Headers["SL-API-Method"] ?? "",
-        req.Headers["SL-API-Timestamp"],
-        payload
-    );
-
-    using HMACSHA256 hmac =
-        new(
-            Encoding.UTF8.GetBytes(
-                secretKey
-            )
-        );
-
-    byte[] hash =
-        hmac.ComputeHash(
-            Encoding.UTF8.GetBytes(
-                data
-            )
-        );
-
-    return WebUtility.UrlEncode(
-        Convert.ToBase64String(hash)
-    );
-}
-
-
-static ApiCredentials GetCredentials(
-    string keyCredentialName,
-    string secretCredentialName)
-{
-    Credential keyCredential =
-        ReadCredential(
-            keyCredentialName
-        );
-
-    Credential secretCredential =
-        ReadCredential(
-            secretCredentialName
-        );
-
-    if (!string.Equals(
-        keyCredential.UserName,
-        secretCredential.UserName,
-        StringComparison.OrdinalIgnoreCase))
+    static void OpenFile(
+        string filePath)
     {
+        Process.Start(
+            new ProcessStartInfo
+            {
+                FileName = filePath,
+                UseShellExecute = true
+            }
+        );
+    }
+
+
+    static async Task WatchFile(
+        string filePath,
+        string token,
+        ApiContext api)
+    {
+        DateTime lastSentWriteTime =
+            File.GetLastWriteTimeUtc(
+                filePath
+            );
+
+        await WaitUntilFileIsOpened(
+            filePath
+        );
+
+        Stamp("06_file_opened");
+
+        int closedChecks = 0;
+
+        while (closedChecks < 4)
+        {
+            await Task.Delay(500);
+
+            if (!File.Exists(filePath))
+            {
+                closedChecks = 0;
+                continue;
+            }
+
+            DateTime currentWriteTime =
+                File.GetLastWriteTimeUtc(
+                    filePath
+                );
+
+            if (currentWriteTime !=
+                lastSentWriteTime)
+            {
+                try
+                {
+                    await SendFileToApi(
+                        filePath,
+                        token,
+                        api
+                    );
+
+                    lastSentWriteTime =
+                        currentWriteTime;
+
+                    Stamp("07_save_uploaded");
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    continue;
+                }
+            }
+
+            if (CanOpenExclusive(filePath))
+            {
+                closedChecks++;
+            }
+            else
+            {
+                closedChecks = 0;
+            }
+        }
+
+        Stamp("08_file_closed");
+
+        DateTime finalWriteTime =
+            File.GetLastWriteTimeUtc(
+                filePath
+            );
+
+        if (finalWriteTime !=
+            lastSentWriteTime)
+        {
+            await SendFileToApi(
+                filePath,
+                token,
+                api
+            );
+
+            Stamp("09_final_upload");
+        }
+
+        File.Delete(filePath);
+
+        Stamp("10_local_file_deleted");
+    }
+
+
+    static async Task SendFileToApi(
+        string filePath,
+        string token,
+        ApiContext api)
+    {
+        byte[] bytes =
+            ReadFileBytes(
+                filePath
+            );
+
+        string base64 =
+            Convert.ToBase64String(
+                bytes
+            );
+
+        string payload =
+            JsonSerializer.Serialize(
+                new
+                {
+                    token,
+                    file = base64
+                }
+            );
+
+        string url =
+            api.ApiRoot +
+            "v1/Folders/GetDocumentFromClient";
+
+        using HttpRequestMessage request =
+            CreateSignedRequest(
+                HttpMethod.Post,
+                url,
+                "application/json",
+                payload,
+                api
+            );
+
+        using HttpResponseMessage response =
+            await Client.SendAsync(request);
+
+        string body =
+            await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception(
+                $"Upload API returned {(int)response.StatusCode}: {body}"
+            );
+        }
+    }
+
+
+    static byte[] ReadFileBytes(
+        string filePath)
+    {
+        using FileStream stream =
+            new(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite |
+                FileShare.Delete
+            );
+
+        using MemoryStream memory =
+            new();
+
+        stream.CopyTo(memory);
+
+        return memory.ToArray();
+    }
+
+
+    static async Task WaitUntilFileIsOpened(
+        string filePath)
+    {
+        DateTime timeout =
+            DateTime.UtcNow.AddSeconds(30);
+
+        while (DateTime.UtcNow < timeout)
+        {
+            if (!CanOpenExclusive(filePath))
+                return;
+
+            await Task.Delay(250);
+        }
+
         throw new Exception(
-            "API key and secret belong to different environments."
+            "Could not detect that the file was opened."
         );
     }
 
-    if (!string.Equals(
-        keyCredential.UserName,
-        "DEV",
-        StringComparison.OrdinalIgnoreCase))
+
+    static bool CanOpenExclusive(
+        string filePath)
     {
-        throw new Exception(
-            $"Unknown environment: {keyCredential.UserName}"
+        try
+        {
+            using FileStream stream =
+                new(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None
+                );
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+
+    static HttpRequestMessage CreateSignedRequest(
+        HttpMethod method,
+        string url,
+        string contentType,
+        string payload,
+        ApiContext api)
+    {
+        string timestamp =
+            DateTime.UtcNow.ToString(
+                "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+                CultureInfo.InvariantCulture
+            );
+
+        string signature =
+            ComputeSignature(
+                url,
+                method.Method,
+                api.AccessKey,
+                timestamp,
+                payload,
+                api.SecretKey
+            );
+
+        HttpRequestMessage request =
+            new(
+                method,
+                url
+            );
+
+        byte[] content =
+            Encoding.UTF8.GetBytes(
+                payload
+            );
+
+        request.Content =
+            new ByteArrayContent(
+                content
+            );
+
+        request.Content.Headers.ContentType =
+            new MediaTypeHeaderValue(
+                contentType
+            );
+
+        request.Headers.TryAddWithoutValidation(
+            "SL-API-Auth",
+            api.AccessKey
+        );
+
+        request.Headers.TryAddWithoutValidation(
+            "SL-API-Timestamp",
+            timestamp
+        );
+
+        request.Headers.TryAddWithoutValidation(
+            "SL-API-Signature",
+            signature
+        );
+
+        return request;
+    }
+
+
+    static string ComputeSignature(
+        string url,
+        string method,
+        string accessKey,
+        string timestamp,
+        string payload,
+        string secretKey)
+    {
+        string stringToSign =
+            $"{url}\n" +
+            $"{method}\n" +
+            $"{accessKey}\n" +
+            $"\n" +
+            $"{timestamp}\n" +
+            $"{payload}";
+
+        using HMACSHA256 hmac =
+            new(
+                Encoding.UTF8.GetBytes(
+                    secretKey
+                )
+            );
+
+        byte[] hash =
+            hmac.ComputeHash(
+                Encoding.UTF8.GetBytes(
+                    stringToSign
+                )
+            );
+
+        return WebUtility.UrlEncode(
+            Convert.ToBase64String(
+                hash
+            )
         );
     }
 
-    return new ApiCredentials(
-        keyCredential.Password,
-        secretCredential.Password
-    );
-}
 
-
-static void Stamp(
-    string name)
-{
-    string fileName =
-        $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{name}.txt";
-
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.MyDocuments
-            ),
-            fileName
-        ),
-        ""
-    );
-}
-
-
-static Credential ReadCredential(
-    string target)
-{
-    if (!NativeMethods.CredReadW(
-        target,
-        1,
-        0,
-        out IntPtr pointer))
+    static ApiContext GetApiContext(
+        string keyCredentialName,
+        string secretCredentialName)
     {
-        throw new Win32Exception(
-            Marshal.GetLastWin32Error(),
-            $"Credential not found: {target}"
+        Credential keyCredential =
+            ReadCredential(
+                keyCredentialName
+            );
+
+        Credential secretCredential =
+            ReadCredential(
+                secretCredentialName
+            );
+
+        if (!string.Equals(
+            keyCredential.UserName,
+            secretCredential.UserName,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            throw new Exception(
+                "API key and secret belong to different environments."
+            );
+        }
+
+        string environment =
+            keyCredential.UserName
+                .ToUpperInvariant();
+
+        string apiRoot =
+            environment switch
+            {
+                "DEV" =>
+                    "https://rhs-limsapou-83.ad.ous-hf.no/" +
+                    "STARLIMS.DEV/rest.web.api/",
+
+                _ => throw new Exception(
+                    $"Unknown environment: {environment}"
+                )
+            };
+
+        return new ApiContext(
+            apiRoot,
+            keyCredential.Password,
+            secretCredential.Password
         );
     }
 
-    try
+
+    static HttpClient CreateHttpClient()
     {
-        NativeCredential credential =
-            Marshal.PtrToStructure<NativeCredential>(
+        HttpClientHandler handler =
+            new()
+            {
+                UseDefaultCredentials = true
+            };
+
+        return new HttpClient(
+            handler
+        );
+    }
+
+
+    static Credential ReadCredential(
+        string target)
+    {
+        if (!NativeMethods.CredReadW(
+            target,
+            1,
+            0,
+            out IntPtr pointer))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error(),
+                $"Credential not found: {target}"
+            );
+        }
+
+        try
+        {
+            NativeCredential credential =
+                Marshal.PtrToStructure<NativeCredential>(
+                    pointer
+                );
+
+            string userName =
+                Marshal.PtrToStringUni(
+                    credential.UserName
+                ) ?? "";
+
+            byte[] bytes =
+                new byte[
+                    credential.CredentialBlobSize
+                ];
+
+            Marshal.Copy(
+                credential.CredentialBlob,
+                bytes,
+                0,
+                bytes.Length
+            );
+
+            string password =
+                Encoding.Unicode
+                    .GetString(bytes)
+                    .TrimEnd('\0');
+
+            return new Credential(
+                userName,
+                password
+            );
+        }
+        finally
+        {
+            NativeMethods.CredFree(
                 pointer
             );
-
-        string userName =
-            Marshal.PtrToStringUni(
-                credential.UserName
-            ) ?? "";
-
-        byte[] bytes =
-            new byte[
-                credential.CredentialBlobSize
-            ];
-
-        Marshal.Copy(
-            credential.CredentialBlob,
-            bytes,
-            0,
-            bytes.Length
-        );
-
-        string password =
-            Encoding.Unicode
-                .GetString(bytes)
-                .TrimEnd('\0');
-
-        return new Credential(
-            userName,
-            password
-        );
-    }
-    finally
-    {
-        NativeMethods.CredFree(pointer);
-    }
-}
-
-
-static string? ReadMessage(
-    Stream input)
-{
-    byte[] lengthBytes =
-        new byte[4];
-
-    if (ReadExact(
-        input,
-        lengthBytes,
-        4) == 0)
-    {
-        return null;
+        }
     }
 
-    int length =
-        BitConverter.ToInt32(
-            lengthBytes,
-            0
-        );
 
-    byte[] data =
-        new byte[length];
-
-    ReadExact(
-        input,
-        data,
-        length
-    );
-
-    return Encoding.UTF8.GetString(
-        data
-    );
-}
-
-
-static int ReadExact(
-    Stream stream,
-    byte[] buffer,
-    int count)
-{
-    int total = 0;
-
-    while (total < count)
+    static void Stamp(
+        string name)
     {
-        int read =
-            stream.Read(
-                buffer,
-                total,
-                count - total
+        string fileName =
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{name}.txt";
+
+        File.WriteAllText(
+            Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.MyDocuments
+                ),
+                fileName
+            ),
+            ""
+        );
+    }
+
+
+    static void WriteError(
+        Exception ex)
+    {
+        string fileName =
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_ERROR.txt";
+
+        File.WriteAllText(
+            Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.MyDocuments
+                ),
+                fileName
+            ),
+            ex.ToString()
+        );
+    }
+
+
+    static string? ReadMessage(
+        Stream input)
+    {
+        byte[] lengthBytes =
+            new byte[4];
+
+        int lengthRead =
+            ReadExact(
+                input,
+                lengthBytes,
+                4
             );
 
-        if (read == 0)
-            return total;
+        if (lengthRead == 0)
+            return null;
 
-        total += read;
+        if (lengthRead != 4)
+        {
+            throw new Exception(
+                "Invalid native message length."
+            );
+        }
+
+        int length =
+            BitConverter.ToInt32(
+                lengthBytes,
+                0
+            );
+
+        byte[] data =
+            new byte[length];
+
+        int dataRead =
+            ReadExact(
+                input,
+                data,
+                length
+            );
+
+        if (dataRead != length)
+        {
+            throw new Exception(
+                "Incomplete native message."
+            );
+        }
+
+        return Encoding.UTF8.GetString(
+            data
+        );
     }
 
-    return total;
-}
+
+    static int ReadExact(
+        Stream stream,
+        byte[] buffer,
+        int count)
+    {
+        int total = 0;
+
+        while (total < count)
+        {
+            int read =
+                stream.Read(
+                    buffer,
+                    total,
+                    count - total
+                );
+
+            if (read == 0)
+                return total;
+
+            total += read;
+        }
+
+        return total;
+    }
 
 
-static void WriteResponse(
-    Stream output,
-    object response)
-{
-    byte[] data =
-        Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(
-                response
-            )
-        );
+    static void WriteResponse(
+        Stream output,
+        object response)
+    {
+        byte[] data =
+            Encoding.UTF8.GetBytes(
+                JsonSerializer.Serialize(
+                    response
+                )
+            );
 
-    byte[] length =
-        BitConverter.GetBytes(
-            data.Length
-        );
+        byte[] length =
+            BitConverter.GetBytes(
+                data.Length
+            );
 
-    output.Write(length);
-    output.Write(data);
-    output.Flush();
+        output.Write(length);
+        output.Write(data);
+        output.Flush();
+    }
 }
 
 
@@ -500,6 +828,7 @@ static class NativeMethods
         uint flags,
         out IntPtr credential
     );
+
 
     [DllImport(
         "Advapi32.dll",
@@ -519,7 +848,10 @@ struct NativeCredential
     public uint Type;
     public IntPtr TargetName;
     public IntPtr Comment;
-    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+
+    public System.Runtime.InteropServices.ComTypes.FILETIME
+        LastWritten;
+
     public uint CredentialBlobSize;
     public IntPtr CredentialBlob;
     public uint Persist;
@@ -536,7 +868,8 @@ sealed record Credential(
 );
 
 
-sealed record ApiCredentials(
+sealed record ApiContext(
+    string ApiRoot,
     string AccessKey,
     string SecretKey
 );
