@@ -11,7 +11,7 @@ using System.Text.Json.Serialization;
 
 using Stream input = Console.OpenStandardInput();
 using Stream output = Console.OpenStandardOutput();
-
+DateTime dateValue = DateTime.Parse(dateString);
       // Create a string array with the lines of text
         string[] lines = {dateValue.ToString("MM/dd/yyyy hh:mm:ss.fff tt") };
 
@@ -145,6 +145,7 @@ static async Task<string> SaveOpenAndWatchAsync(
     await WaitUntilFileIsOpenedAsync(
         filePath
     );
+      DateTime dateValue = DateTime.Parse(dateString);
             string[] lines = {dateValue.ToString("MM/dd/yyyy hh:mm:ss.fff tt") };
 
         // Set a variable to the Documents path.
