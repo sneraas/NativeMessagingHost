@@ -14,7 +14,7 @@ using Stream output = Console.OpenStandardOutput();
 File.WriteAllText(
     Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        $"{DateTimeOffset.Now.ToUnixTimeMilliseconds()}.txt"
+        $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}.txt"
     ),
     ""
 );
@@ -142,7 +142,7 @@ static async Task<string> SaveOpenAndWatchAsync(
 File.WriteAllText(
     Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        $"{DateTimeOffset.Now.ToUnixTimeMilliseconds()}.txt"
+        $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}.txt"
     ),
     ""
 );
