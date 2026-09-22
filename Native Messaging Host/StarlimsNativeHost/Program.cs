@@ -12,6 +12,13 @@ using System.Text.Json.Serialization;
 using Stream input = Console.OpenStandardInput();
 using Stream output = Console.OpenStandardOutput();
 
+using HttpClientHandler handler = new()
+{
+    UseDefaultCredentials = true
+};
+
+using HttpClient client = new(handler);
+
 while (true)
 {
     try
@@ -23,47 +30,44 @@ while (true)
 
         Stamp("01_message_received");
 
-        NativeRequest request =
+        NativeRequest nativeRequest =
             JsonSerializer.Deserialize<NativeRequest>(json)
             ?? throw new Exception("Invalid request.");
 
-        ApiCredentials credentials =
-            GetCredentials(
-                request.Key,
-                request.Secret
-            );
+        ApiContext api = GetApiContext(
+            nativeRequest.Key,
+            nativeRequest.Secret
+        );
 
-        ApiResult result =
-            await GetDocumentInfo(
-                request.Token,
-                credentials
-            );
+        ApiResult result = await GetDocumentInfo(
+            nativeRequest.Token,
+            api,
+            client
+        );
 
         Stamp("02_metadata_received");
 
-        byte[] bytes = await DownloadFile(
-            result.documentURL,
-            accessKey,
-            secretKey
+        byte[] fileBytes = await DownloadFile(
+            result.DownloadUrl,
+            api,
+            client
         );
 
-        string filePath = Path.Combine(
-            result.ClientFilePath,
-            result.FileName
+        Stamp("03_binary_downloaded");
+
+        string filePath = SaveFile(
+            result,
+            nativeRequest.Token,
+            fileBytes
         );
 
-        File.WriteAllBytes(
-            filePath,
-            bytes
-        );
+        Stamp("04_file_saved");
 
-        Process.Start(
-            new ProcessStartInfo
-            {
-                FileName = filePath,
-                UseShellExecute = true
-            }
-        );
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = filePath,
+            UseShellExecute = true
+        });
 
         Stamp("05_process_started");
 
@@ -74,83 +78,40 @@ while (true)
             filePath
         });
     }
-catch (Exception ex)
-{
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_ERROR.txt"
-        ),
-        ex.ToString()
-    );
-
-    WriteResponse(output, new
+    catch (Exception ex)
     {
-        ok = false,
-        error = ex.Message
-    });
-}
+        WriteError(ex);
+
+        WriteResponse(output, new
+        {
+            ok = false,
+            error = ex.Message
+        });
+    }
 }
 
 
 static async Task<ApiResult> GetDocumentInfo(
     string token,
-    ApiCredentials credentials)
+    ApiContext api,
+    HttpClient client)
 {
     string url =
-        "https://rhs-limsapou-83.ad.ous-hf.no/" +
-        "STARLIMS.DEV/rest.web.api/v1/Folders/SendDocumentToClient" +
+        api.ApiRoot +
+        "v1/Folders/SendDocumentToClient" +
         $"?token={WebUtility.UrlEncode(token)}";
 
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
-
-    string signature =
-        ComputeSignature(
-            url,
-            "GET",
-            credentials.AccessKey,
-            timestamp,
-            "",
-            credentials.SecretKey
-        );
-
-    using HttpClientHandler handler = new()
-    {
-        UseDefaultCredentials = true
-    };
-
-    using HttpClient client = new(handler);
-
     using HttpRequestMessage request =
-        new(HttpMethod.Get, url);
-
-    request.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
+        CreateSignedGet(
+            url,
+            "application/json",
+            api
         );
 
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
+    request.Headers.Accept.Add(
+        new MediaTypeWithQualityHeaderValue(
             "application/json"
-        );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        credentials.AccessKey
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
+        )
     );
 
     using HttpResponseMessage response =
@@ -181,47 +142,124 @@ static async Task<ApiResult> GetDocumentInfo(
 
 static async Task<byte[]> DownloadFile(
     string url,
+    ApiContext api,
+    HttpClient client)
+{
+    if (string.IsNullOrWhiteSpace(url))
+        throw new Exception("URL is empty.");
+
+    using HttpRequestMessage request =
+        CreateSignedGet(
+            url,
+            "text/plain",
+            api
+        );
+
+    using HttpResponseMessage response =
+        await client.SendAsync(request);
+
+    if (!response.IsSuccessStatusCode)
+    {
+        string body =
+            await response.Content.ReadAsStringAsync();
+
+        throw new Exception(
+            $"Download API returned {(int)response.StatusCode}: {body}"
+        );
+    }
+
+    return await response.Content.ReadAsByteArrayAsync();
+}
+
+
+static HttpRequestMessage CreateSignedGet(
+    string url,
+    string contentType,
+    ApiContext api)
+{
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture
+        );
+
+    string signature =
+        ComputeSignature(
+            url,
+            "GET",
+            api.AccessKey,
+            timestamp,
+            "",
+            api.SecretKey
+        );
+
+    HttpRequestMessage request =
+        new(HttpMethod.Get, url);
+
+    request.Content =
+        new ByteArrayContent(
+            Array.Empty<byte>()
+        );
+
+    request.Content.Headers.ContentType =
+        new MediaTypeHeaderValue(
+            contentType
+        );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Auth",
+        api.AccessKey
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Signature",
+        signature
+    );
+
+    return request;
+}
+
+
+static string ComputeSignature(
+    string url,
+    string method,
     string accessKey,
+    string timestamp,
+    string payload,
     string secretKey)
 {
-    HttpWebRequest req =
-        WebRequest.CreateHttp(url);
+    string data =
+        $"{url}\n" +
+        $"{method}\n" +
+        $"{accessKey}\n" +
+        $"\n" +
+        $"{timestamp}\n" +
+        $"{payload}";
 
-    req.Method = "GET";
-    req.ContentType = "text/plain";
+    using HMACSHA256 hmac =
+        new(
+            Encoding.UTF8.GetBytes(
+                secretKey
+            )
+        );
 
-    req.Headers.Add(
-        "SL-API-Auth",
-        accessKey
+    byte[] hash =
+        hmac.ComputeHash(
+            Encoding.UTF8.GetBytes(
+                data
+            )
+        );
+
+    return WebUtility.UrlEncode(
+        Convert.ToBase64String(hash)
     );
-
-    req.Headers.Add(
-        "SL-API-Timestamp",
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fffZ"
-        )
-    );
-
-    req.Headers.Add(
-        "SL-API-Signature",
-        ComputeSignature(
-            req,
-            "",
-            secretKey
-        )
-    );
-
-    using HttpWebResponse resp =
-        (HttpWebResponse)
-        await req.GetResponseAsync();
-
-    using MemoryStream stream = new();
-
-    await resp.GetResponseStream()
-        .CopyToAsync(stream);
-
-    return stream.ToArray();
 }
+
 
 static string SaveFile(
     ApiResult result,
@@ -255,55 +293,23 @@ static string SaveFile(
 }
 
 
-static string ComputeSignature(
-    HttpWebRequest req,
-    string payload,
-    string secretKey)
-{
-    string data =
-        $"{req.RequestUri.AbsoluteUri}\n" +
-        $"{req.Method}\n" +
-        $"{req.Headers["SL-API-Auth"]}\n" +
-        $"{req.Headers["SL-API-Method"] ?? ""}\n" +
-        $"{req.Headers["SL-API-Timestamp"]}\n" +
-        $"{payload}";
-
-    using HMACSHA256 hmac =
-        new(
-            Encoding.UTF8.GetBytes(
-                secretKey
-            )
-        );
-
-    return WebUtility.UrlEncode(
-        Convert.ToBase64String(
-            hmac.ComputeHash(
-                Encoding.UTF8.GetBytes(
-                    data
-                )
-            )
-        )
-    );
-}
-
-
-static ApiCredentials GetCredentials(
+static ApiContext GetApiContext(
     string keyCredentialName,
     string secretCredentialName)
 {
-    Credential keyCredential =
+    Credential key =
         ReadCredential(
             keyCredentialName
         );
 
-    Credential secretCredential =
+    Credential secret =
         ReadCredential(
             secretCredentialName
         );
 
     if (!string.Equals(
-        keyCredential.UserName,
-        secretCredential.UserName,
+        key.UserName,
+        secret.UserName,
         StringComparison.OrdinalIgnoreCase))
     {
         throw new Exception(
@@ -311,37 +317,22 @@ static ApiCredentials GetCredentials(
         );
     }
 
-    if (!string.Equals(
-        keyCredential.UserName,
-        "DEV",
-        StringComparison.OrdinalIgnoreCase))
-    {
-        throw new Exception(
-            $"Unknown environment: {keyCredential.UserName}"
-        );
-    }
+    string apiRoot =
+        key.UserName.ToUpperInvariant() switch
+        {
+            "DEV" =>
+                "https://rhs-limsapou-83.ad.ous-hf.no/" +
+                "STARLIMS.DEV/rest.web.api/",
 
-    return new ApiCredentials(
-        keyCredential.Password,
-        secretCredential.Password
-    );
-}
+            _ => throw new Exception(
+                $"Unknown environment: {key.UserName}"
+            )
+        };
 
-
-static void Stamp(
-    string name)
-{
-    string fileName =
-        $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{name}.txt";
-
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.MyDocuments
-            ),
-            fileName
-        ),
-        ""
+    return new ApiContext(
+        apiRoot,
+        key.Password,
+        secret.Password
     );
 }
 
@@ -402,6 +393,36 @@ static Credential ReadCredential(
 }
 
 
+static void Stamp(
+    string name)
+{
+    File.WriteAllText(
+        Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.MyDocuments
+            ),
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{name}.txt"
+        ),
+        ""
+    );
+}
+
+
+static void WriteError(
+    Exception ex)
+{
+    File.WriteAllText(
+        Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.MyDocuments
+            ),
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_ERROR.txt"
+        ),
+        ex.ToString()
+    );
+}
+
+
 static string? ReadMessage(
     Stream input)
 {
@@ -425,15 +446,17 @@ static string? ReadMessage(
     byte[] data =
         new byte[length];
 
-    ReadExact(
+    if (ReadExact(
         input,
         data,
-        length
-    );
+        length) != length)
+    {
+        throw new Exception(
+            "Incomplete native message."
+        );
+    }
 
-    return Encoding.UTF8.GetString(
-        data
-    );
+    return Encoding.UTF8.GetString(data);
 }
 
 
@@ -474,12 +497,12 @@ static void WriteResponse(
             )
         );
 
-    byte[] length =
+    output.Write(
         BitConverter.GetBytes(
             data.Length
-        );
+        )
+    );
 
-    output.Write(length);
     output.Write(data);
     output.Flush();
 }
@@ -535,7 +558,8 @@ sealed record Credential(
 );
 
 
-sealed record ApiCredentials(
+sealed record ApiContext(
+    string ApiRoot,
     string AccessKey,
     string SecretKey
 );
