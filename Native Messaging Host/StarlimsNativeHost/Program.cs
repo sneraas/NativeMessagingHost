@@ -75,16 +75,22 @@ while (true)
             filePath
         });
     }
-    catch (Exception ex)
-    {
-        Stamp("ERROR");
+catch (Exception ex)
+{
+    File.WriteAllText(
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_ERROR.txt"
+        ),
+        ex.ToString()
+    );
 
-        WriteResponse(output, new
-        {
-            ok = false,
-            error = ex.Message
-        });
-    }
+    WriteResponse(output, new
+    {
+        ok = false,
+        error = ex.Message
+    });
+}
 }
 
 
