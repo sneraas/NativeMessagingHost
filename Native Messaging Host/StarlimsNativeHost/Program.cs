@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Forms;
 using System.Text.Json.Serialization;
 
 using Stream input = Console.OpenStandardInput();
@@ -37,7 +38,7 @@ while (true)
             request.Key,
             request.Secret
         );
-
+System.Windows.Forms.MessageBox.Show(result.downloadURL);
         if (result.FileAction == "read")
         {
             string filePath = SaveAndOpen(result);
@@ -875,6 +876,9 @@ sealed class ApiResult
 
     [JsonPropertyName("FILE_NAME")]
     public string FileName { get; set; } = "";
+
+    [JsonPropertyName("URL")]
+    public string documentURL { get; set; } = "";
 
     [JsonPropertyName("FILE_DATA")]
     public string FileData { get; set; } = "";
