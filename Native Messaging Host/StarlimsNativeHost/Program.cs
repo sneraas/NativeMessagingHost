@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Windows.Forms;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 
 using Stream input = Console.OpenStandardInput();
@@ -38,7 +38,10 @@ while (true)
             request.Key,
             request.Secret
         );
-System.Windows.Forms.MessageBox.Show(result.downloadURL);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
+
+MessageBox(IntPtr.Zero, "result.downloadURL", "Debug", 0);
         if (result.FileAction == "read")
         {
             string filePath = SaveAndOpen(result);
