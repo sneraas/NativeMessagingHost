@@ -11,9 +11,8 @@ using System.Text.Json.Serialization;
 
 using Stream input = Console.OpenStandardInput();
 using Stream output = Console.OpenStandardOutput();
-DateTime dateValue = DateTime.Parse(dateString);
+        DateTime dateValue = DateTime.Parse(dateString).ToString("MM/dd/yyyy hh:mm:ss.fff tt");
       // Create a string array with the lines of text
-        string[] lines = {dateValue.ToString("MM/dd/yyyy hh:mm:ss.fff tt") };
 
         // Set a variable to the Documents path.
         string docPath =
@@ -22,8 +21,7 @@ DateTime dateValue = DateTime.Parse(dateString);
         // Write the string array to a new file named "WriteLines.txt".
         using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines1.txt")))
         {
-            foreach (string line in lines)
-                outputFile.WriteLine(line);
+                outputFile.WriteLine(dateValue);
         }
 
 while (true)
@@ -145,19 +143,19 @@ static async Task<string> SaveOpenAndWatchAsync(
     await WaitUntilFileIsOpenedAsync(
         filePath
     );
-      DateTime dateValue = DateTime.Parse(dateString);
-            string[] lines = {dateValue.ToString("MM/dd/yyyy hh:mm:ss.fff tt") };
+            DateTime dateValue = DateTime.Parse(dateString).ToString("MM/dd/yyyy hh:mm:ss.fff tt");
+      // Create a string array with the lines of text
 
         // Set a variable to the Documents path.
         string docPath =
           Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 
         // Write the string array to a new file named "WriteLines.txt".
-        using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines.txt")))
+        using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines1.txt")))
         {
-            foreach (string line in lines)
-                outputFile.WriteLine(line);
+                outputFile.WriteLine(dateValue);
         }
+
     int closedChecks = 0;
 
     while (closedChecks < 4)
