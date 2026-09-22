@@ -41,30 +41,28 @@ while (true)
 
         Stamp("02_metadata_received");
 
-        byte[] fileBytes =
-            await DownloadFile(
-                result.DownloadUrl,
-                credentials
-            );
+byte[] bytes = await DownloadFile(
+    result.DownloadUrl,
+    credentials
+);
 
-        Stamp("03_binary_downloaded");
+string filePath = Path.Combine(
+    result.ClientFilePath,
+    result.FileName
+);
 
-        string filePath =
-            SaveFile(
-                result,
-                request.Token,
-                fileBytes
-            );
+File.WriteAllBytes(
+    filePath,
+    bytes
+);
 
-        Stamp("04_file_saved");
-
-        Process.Start(
-            new ProcessStartInfo
-            {
-                FileName = filePath,
-                UseShellExecute = true
-            }
-        );
+Process.Start(
+    new ProcessStartInfo
+    {
+        FileName = filePath,
+        UseShellExecute = true
+    }
+);
 
         Stamp("05_process_started");
 
@@ -184,79 +182,42 @@ static async Task<byte[]> DownloadFile(
     string url,
     ApiCredentials credentials)
 {
-    if (string.IsNullOrWhiteSpace(url))
-    {
-        throw new Exception(
-            "Download URL is empty."
-        );
-    }
+    HttpWebRequest req =
+        WebRequest.CreateHttp(url);
 
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
+    req.Method = "GET";
+    req.ContentType = "text/plain";
 
-    string signature =
-        ComputeSignature(
-            url,
-            "GET",
-            credentials.AccessKey,
-            timestamp,
-            "",
-            credentials.SecretKey
-        );
-
-    using HttpClientHandler handler = new()
-    {
-        UseDefaultCredentials = true
-    };
-
-    using HttpClient client = new(handler);
-
-    using HttpRequestMessage request =
-        new(HttpMethod.Get, url);
-
-    request.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
-        );
-
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
-            "text/plain"
-        );
-
-    request.Headers.TryAddWithoutValidation(
+    req.Headers.Add(
         "SL-API-Auth",
         credentials.AccessKey
     );
 
-    request.Headers.TryAddWithoutValidation(
+    req.Headers.Add(
         "SL-API-Timestamp",
-        timestamp
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fffZ"
+        )
     );
 
-    request.Headers.TryAddWithoutValidation(
+    req.Headers.Add(
         "SL-API-Signature",
-        signature
+        ComputeSignature(
+            req,
+            "",
+            credentials.SecretKey
+        )
     );
 
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
+    using HttpWebResponse resp =
+        (HttpWebResponse)await req.GetResponseAsync();
 
-    if (!response.IsSuccessStatusCode)
-    {
-        string body =
-            await response.Content.ReadAsStringAsync();
+    using MemoryStream stream = new();
 
-        throw new Exception(
-            $"Download API returned {(int)response.StatusCode}: {body}"
-        );
-    }
+    await resp.GetResponseStream()
+        .CopyToAsync(stream);
 
-    return await response.Content
-        .ReadAsByteArrayAsync();
+    return stream.ToArray();
 }
 
 
@@ -293,20 +254,19 @@ static string SaveFile(
 
 
 static string ComputeSignature(
-    string url,
-    string method,
-    string accessKey,
-    string timestamp,
+    HttpWebRequest req,
     string payload,
     string secretKey)
 {
-    string stringToSign =
-        $"{url}\n" +
-        $"{method}\n" +
-        $"{accessKey}\n" +
-        $"\n" +
-        $"{timestamp}\n" +
-        $"{payload}";
+    string data = string.Format(
+        "{0}\n{1}\n{2}\n{3}\n{4}\n{5}",
+        req.RequestUri.AbsoluteUri,
+        req.Method,
+        req.Headers["SL-API-Auth"],
+        req.Headers["SL-API-Method"] ?? "",
+        req.Headers["SL-API-Timestamp"],
+        payload
+    );
 
     using HMACSHA256 hmac =
         new(
@@ -318,7 +278,7 @@ static string ComputeSignature(
     byte[] hash =
         hmac.ComputeHash(
             Encoding.UTF8.GetBytes(
-                stringToSign
+                data
             )
         );
 
