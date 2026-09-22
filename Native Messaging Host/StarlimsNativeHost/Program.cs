@@ -41,22 +41,21 @@ while (true)
 
         Stamp("02_metadata_received");
 
-        byte[] fileBytes =
-            await DownloadFile(
-                result.DownloadUrl,
-                credentials
-            );
+        byte[] bytes = await DownloadFile(
+            result.documentURL,
+            accessKey,
+            secretKey
+        );
 
-        Stamp("03_binary_downloaded");
+        string filePath = Path.Combine(
+            result.ClientFilePath,
+            result.FileName
+        );
 
-        string filePath =
-            SaveFile(
-                result,
-                request.Token,
-                fileBytes
-            );
-
-        Stamp("04_file_saved");
+        File.WriteAllBytes(
+            filePath,
+            bytes
+        );
 
         Process.Start(
             new ProcessStartInfo
@@ -182,33 +181,47 @@ static async Task<ApiResult> GetDocumentInfo(
 
 static async Task<byte[]> DownloadFile(
     string url,
-    ApiCredentials credentials)
+    string accessKey,
+    string secretKey)
 {
-
-   HttpWebRequest req = WebRequest.CreateHttp(url);
+    HttpWebRequest req =
+        WebRequest.CreateHttp(url);
 
     req.Method = "GET";
     req.ContentType = "text/plain";
 
-    req.Headers.Add("SL-API-Auth", credentials.AccessKey);
-    req.Headers.Add("SL-API-Timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"));
+    req.Headers.Add(
+        "SL-API-Auth",
+        accessKey
+    );
 
-    req.Headers.Add("SL-API-Signature", ComputeSignature(req, ""));
+    req.Headers.Add(
+        "SL-API-Timestamp",
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fffZ"
+        )
+    );
 
-    HttpWebResponse resp = (HttpWebResponse)req.GetResponse();
-    Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode);
+    req.Headers.Add(
+        "SL-API-Signature",
+        ComputeSignature(
+            req,
+            "",
+            secretKey
+        )
+    );
 
-    string localPath = Path.GetTempFileName();
+    using HttpWebResponse resp =
+        (HttpWebResponse)
+        await req.GetResponseAsync();
 
-    using (MemoryStream stream = new MemoryStream())
-    {
-        resp.GetResponseStream().CopyTo(stream);
-        File.WriteAllBytes(localPath, stream.ToArray());
-    }
+    using MemoryStream stream = new();
 
-    return localPath;
+    await resp.GetResponseStream()
+        .CopyToAsync(stream);
+
+    return stream.ToArray();
 }
-
 
 static string SaveFile(
     ApiResult result,
@@ -243,19 +256,16 @@ static string SaveFile(
 
 
 static string ComputeSignature(
-    string url,
-    string method,
-    string accessKey,
-    string timestamp,
+    HttpWebRequest req,
     string payload,
     string secretKey)
 {
-    string stringToSign =
-        $"{url}\n" +
-        $"{method}\n" +
-        $"{accessKey}\n" +
-        $"\n" +
-        $"{timestamp}\n" +
+    string data =
+        $"{req.RequestUri.AbsoluteUri}\n" +
+        $"{req.Method}\n" +
+        $"{req.Headers["SL-API-Auth"]}\n" +
+        $"{req.Headers["SL-API-Method"] ?? ""}\n" +
+        $"{req.Headers["SL-API-Timestamp"]}\n" +
         $"{payload}";
 
     using HMACSHA256 hmac =
@@ -265,15 +275,14 @@ static string ComputeSignature(
             )
         );
 
-    byte[] hash =
-        hmac.ComputeHash(
-            Encoding.UTF8.GetBytes(
-                stringToSign
-            )
-        );
-
     return WebUtility.UrlEncode(
-        Convert.ToBase64String(hash)
+        Convert.ToBase64String(
+            hmac.ComputeHash(
+                Encoding.UTF8.GetBytes(
+                    data
+                )
+            )
+        )
     );
 }
 
