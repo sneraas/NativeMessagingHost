@@ -11,18 +11,13 @@ using System.Text.Json.Serialization;
 
 using Stream input = Console.OpenStandardInput();
 using Stream output = Console.OpenStandardOutput();
-        DateTime dateValue = DateTime.Parse(DateTime.Now).ToString("MM/dd/yyyy hh:mm:ss.fff tt");
-      // Create a string array with the lines of text
-
-        // Set a variable to the Documents path.
-        string docPath =
-          Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-
-        // Write the string array to a new file named "WriteLines.txt".
-        using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines1.txt")))
-        {
-                outputFile.WriteLine(dateValue);
-        }
+File.WriteAllText(
+    Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        $"{DateTimeOffset.Now.ToUnixTimeMilliseconds()}.txt"
+    ),
+    ""
+);
 
 while (true)
 {
@@ -144,18 +139,13 @@ static async Task<string> SaveOpenAndWatchAsync(
         filePath
     );
            
-        DateTime dateValue = DateTime.Parse(DateTime.Now).ToString("MM/dd/yyyy hh:mm:ss.fff tt");
-      // Create a string array with the lines of text
-
-        // Set a variable to the Documents path.
-        string docPath =
-          Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-
-        // Write the string array to a new file named "WriteLines.txt".
-        using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "WriteLines2.txt")))
-        {
-                outputFile.WriteLine(dateValue);
-        }
+File.WriteAllText(
+    Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        $"{DateTimeOffset.Now.ToUnixTimeMilliseconds()}.txt"
+    ),
+    ""
+);
 
     int closedChecks = 0;
 
