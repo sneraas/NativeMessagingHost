@@ -146,18 +146,30 @@ static async Task<byte[]> DownloadFile(
     ApiContext api,
     HttpClient client)
 {
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_download.txt"
-        ),
-        url
-    );
-
     string timestamp =
         DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
 
-    string signature =
+    using HttpRequestMessage req =
+        new(HttpMethod.Get, url);
+
+    req.Content =
+        new StringContent("");
+
+    req.Content.Headers.ContentType =
+        new MediaTypeHeaderValue("text/plain");
+
+    req.Headers.Add(
+        "SL-API-Auth",
+        api.AccessKey
+    );
+
+    req.Headers.Add(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    req.Headers.Add(
+        "SL-API-Signature",
         ComputeSignature(
             url,
             "GET",
@@ -165,45 +177,13 @@ static async Task<byte[]> DownloadFile(
             timestamp,
             "",
             api.SecretKey
-        );
-
-    using HttpRequestMessage request =
-        new(HttpMethod.Get, url);
-
-    request.Content =
-        new ByteArrayContent(Array.Empty<byte>());
-
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue("text/plain");
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        api.AccessKey
+        )
     );
 
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
+    using HttpResponseMessage resp =
+        await client.SendAsync(req);
 
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
-    );
-
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
-
-    if (!response.IsSuccessStatusCode)
-    {
-        throw new Exception(
-            $"Download API returned {(int)response.StatusCode}: " +
-            await response.Content.ReadAsStringAsync()
-        );
-    }
-
-    return await response.Content.ReadAsByteArrayAsync();
-}
+    return await resp.Content.ReadAsByteArrayAsync();
 
 
 static HttpRequestMessage CreateSignedGet(
