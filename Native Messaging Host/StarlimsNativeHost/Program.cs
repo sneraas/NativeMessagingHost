@@ -28,7 +28,7 @@ while (true)
         if (json == null)
             break;
 
-        Stamp("01_message_received");
+        Stamp("01_message_received", json);
 
         NativeRequest nativeRequest =
             JsonSerializer.Deserialize<NativeRequest>(json)
@@ -45,7 +45,7 @@ while (true)
             client
         );
 
-        Stamp("02_metadata_received");
+        Stamp("02_metadata_received",  JsonSerializer.Serialize(result));
 
         byte[] fileBytes = await DownloadFile(
             result.DownloadUrl,
@@ -409,7 +409,8 @@ static Credential ReadCredential(
 
 
 static void Stamp(
-    string name)
+    string name,
+    string content = "")
 {
     File.WriteAllText(
         Path.Combine(
@@ -418,7 +419,7 @@ static void Stamp(
             ),
             $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{name}.txt"
         ),
-        ""
+        content
     );
 }
 
