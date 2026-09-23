@@ -156,7 +156,7 @@ static async Task<byte[]> DownloadFile(
     ApiContext api,
     HttpClient client)
 {
-    Stamp(url)
+    
     string timestamp =
         DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
 
