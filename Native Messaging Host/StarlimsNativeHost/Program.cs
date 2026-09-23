@@ -96,12 +96,18 @@ while (true)
 }
 static void StartWorker(string token, string filePath)
 {
-    Process.Start(new ProcessStartInfo
+    ProcessStartInfo startInfo = new()
     {
         FileName = Environment.ProcessPath!,
-        Arguments = $"--worker \"{token}\" \"{filePath}\"",
-        UseShellExecute = true
-    });
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+
+    startInfo.ArgumentList.Add("--worker");
+    startInfo.ArgumentList.Add(token);
+    startInfo.ArgumentList.Add(filePath);
+
+    Process.Start(startInfo);
 }
 
 static async Task RunWorker(
