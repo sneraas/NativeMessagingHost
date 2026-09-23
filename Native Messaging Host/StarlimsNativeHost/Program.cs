@@ -193,25 +193,50 @@ static bool IsDocumentOpen(
     {
         dynamic uia = automation;
 
-        const int UIA_NamePropertyId = 30005;
-        const int TreeScope_Subtree = 4;
+        const int UIA_ControlTypePropertyId = 30003;
+        const int UIA_TabItemControlTypeId = 50019;
+        const int TreeScope_Descendants = 4;
 
         dynamic condition =
             uia.CreatePropertyCondition(
-                UIA_NamePropertyId,
-                fileName
+                UIA_ControlTypePropertyId,
+                UIA_TabItemControlTypeId
             );
 
         dynamic root =
             uia.GetRootElement();
 
-        dynamic element =
-            root.FindFirst(
-                TreeScope_Subtree,
+        dynamic tabs =
+            root.FindAll(
+                TreeScope_Descendants,
                 condition
             );
 
-        return element != null;
+        for (int i = 0; i < tabs.Length; i++)
+        {
+            dynamic tab = tabs.GetElement(i);
+
+            string name =
+                tab.CurrentName ?? "";
+
+            if (name.Contains(
+                fileName,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                File.AppendAllText(
+                    Path.Combine(
+                        Environment.GetFolderPath(
+                            Environment.SpecialFolder.MyDocuments
+                        ),
+                        "UIA_TABS.txt"
+                    ),
+                    name + Environment.NewLine
+                );
+                return true;
+            }
+        }
+
+        return false;
     }
     catch
     {
