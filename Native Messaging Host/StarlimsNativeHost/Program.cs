@@ -145,84 +145,48 @@ static async Task<byte[]> DownloadFile(
     ApiContext api,
     HttpClient client)
 {
-    if (string.IsNullOrWhiteSpace(url))
-        throw new Exception("URL is empty.");
+    File.WriteAllText(
+        Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.MyDocuments
+            ),
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{url}.txt"
+        ),
+        ""
+    );
+    File.WriteAllText(
+        Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.MyDocuments
+            ),
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{api.AccessKey}.txt"
+        ),
+        ""
+    );
+    HttpWebRequest req = WebRequest.CreateHttp(url);
 
-    using HttpRequestMessage request =
-        CreateSignedGet(
-            url,
-            "text/plain",
-            api
-        );
+    req.Method = "GET";
+    req.ContentType = "text/plain";
 
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
+    req.Headers.Add("SL-API-Auth", api.AccessKey);
+    req.Headers.Add("SL-API-Timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"));
 
-    if (!response.IsSuccessStatusCode)
+    req.Headers.Add("SL-API-Signature", ComputeSignature(req, ""));
+
+    HttpWebResponse resp = (HttpWebResponse)req.GetResponse();
+    Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode);
+
+    string localPath = Path.GetTempFileName();
+
+    using (MemoryStream stream = new MemoryStream())
     {
-        string body =
-            await response.Content.ReadAsStringAsync();
-
-        throw new Exception(
-            $"Download API returned {(int)response.StatusCode}: {body}"
-        );
+        resp.GetResponseStream().CopyTo(stream);
+        File.WriteAllBytes(localPath, stream.ToArray());
     }
 
-    return await response.Content.ReadAsByteArrayAsync();
+    return localPath;
 }
 
-
-static HttpRequestMessage CreateSignedGet(
-    string url,
-    string contentType,
-    ApiContext api)
-{
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
-            CultureInfo.InvariantCulture
-        );
-
-    string signature =
-        ComputeSignature(
-            url,
-            "GET",
-            api.AccessKey,
-            timestamp,
-            "",
-            api.SecretKey
-        );
-
-    HttpRequestMessage request =
-        new(HttpMethod.Get, url);
-
-    request.Content =
-        new ByteArrayContent(
-            Array.Empty<byte>()
-        );
-
-    request.Content.Headers.ContentType =
-        new MediaTypeHeaderValue(
-            contentType
-        );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Auth",
-        api.AccessKey
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Timestamp",
-        timestamp
-    );
-
-    request.Headers.TryAddWithoutValidation(
-        "SL-API-Signature",
-        signature
-    );
-
-    return request;
-}
 
 
 static string ComputeSignature(
