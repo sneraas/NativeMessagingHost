@@ -140,6 +140,7 @@ static async Task<ApiResult> GetDocumentInfo(
 }
 
 
+
 static async Task<byte[]> DownloadFile(
     string url,
     ApiContext api,
@@ -202,6 +203,59 @@ static async Task<byte[]> DownloadFile(
     }
 
     return await response.Content.ReadAsByteArrayAsync();
+}
+
+
+static HttpRequestMessage CreateSignedGet(
+    string url,
+    string contentType,
+    ApiContext api)
+{
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture
+        );
+
+    string signature =
+        ComputeSignature(
+            url,
+            "GET",
+            api.AccessKey,
+            timestamp,
+            "",
+            api.SecretKey
+        );
+
+    HttpRequestMessage request =
+        new(HttpMethod.Get, url);
+
+    request.Content =
+        new ByteArrayContent(
+            Array.Empty<byte>()
+        );
+
+    request.Content.Headers.ContentType =
+        new MediaTypeHeaderValue(
+            contentType
+        );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Auth",
+        api.AccessKey
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Signature",
+        signature
+    );
+
+    return request;
 }
 
 
