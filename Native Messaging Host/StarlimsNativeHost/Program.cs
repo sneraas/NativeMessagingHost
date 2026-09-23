@@ -53,7 +53,12 @@ while (true)
             client
         );
 
-        Stamp("03_binary_downloaded");
+        Stamp(
+            "03_binary_downloaded",
+            $"Size: {fileBytes.Length} bytes\n" +
+            $"First 100 bytes: {Convert.ToHexString(fileBytes.Take(100).ToArray())}\n" +
+            $"As text: {Encoding.UTF8.GetString(fileBytes.Take(1000).ToArray())}"
+        );
 
         string filePath = SaveFile(
             result,
@@ -61,7 +66,12 @@ while (true)
             fileBytes
         );
 
-        Stamp("04_file_saved");
+        Stamp(
+            "04_file_saved",
+            $"Downloaded: {fileBytes.Length} bytes\n" +
+            $"Saved: {new FileInfo(filePath).Length} bytes\n" +
+            $"Identical: {fileBytes.SequenceEqual(File.ReadAllBytes(filePath))}"
+        );
 
         Process.Start(new ProcessStartInfo
         {
