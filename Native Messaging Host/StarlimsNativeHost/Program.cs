@@ -64,10 +64,16 @@ while (true)
             fileBytes
         );
 
-  if (result.FileAction == "readwrite")
+if (result.FileAction == "readwrite")
 {
     StartWorker(nativeRequest.Token, filePath);
 }
+
+Process.Start(new ProcessStartInfo
+{
+    FileName = filePath,
+    UseShellExecute = true
+});
 
         Process.Start(new ProcessStartInfo
         {
@@ -114,12 +120,141 @@ static async Task RunWorker(
     string token,
     string filePath)
 {
-    while (File.Exists(filePath))
+    string fileName = Path.GetFileName(filePath);
+
+    object? automation = CreateUiAutomation();
+
+    bool detected = false;
+
+    for (int i = 0; i < 30; i++)
     {
-        await Task.Delay(1000);
+        if (IsDocumentOpen(fileName, automation))
+        {
+            detected = true;
+            break;
+        }
+
+        await Task.Delay(500);
+    }
+
+    if (!detected)
+        return;
+
+    int closedChecks = 0;
+
+    while (closedChecks < 3)
+    {
+        await Task.Delay(500);
+
+        if (IsDocumentOpen(fileName, automation))
+            closedChecks = 0;
+        else
+            closedChecks++;
+    }
+
+    NativeMethods.MessageBoxW(
+        IntPtr.Zero,
+        $"{fileName} er lukka.",
+        "STARLIMS LocalFS",
+        0x40
+    );
+}
+
+static object? CreateUiAutomation()
+{
+    try
+    {
+        Type? type = Type.GetTypeFromCLSID(
+            new Guid("FF48DBA4-60EF-4201-AA87-54103EEF594E")
+        );
+
+        return type == null
+            ? null
+            : Activator.CreateInstance(type);
+    }
+    catch
+    {
+        return null;
     }
 }
 
+
+static bool IsDocumentOpen(
+    string fileName,
+    object? automation)
+{
+    if (HasWindowWithFileName(fileName))
+        return true;
+
+    if (automation == null)
+        return false;
+
+    try
+    {
+        dynamic uia = automation;
+
+        const int UIA_NamePropertyId = 30005;
+        const int TreeScope_Subtree = 4;
+
+        dynamic condition =
+            uia.CreatePropertyCondition(
+                UIA_NamePropertyId,
+                fileName
+            );
+
+        dynamic root =
+            uia.GetRootElement();
+
+        dynamic element =
+            root.FindFirst(
+                TreeScope_Subtree,
+                condition
+            );
+
+        return element != null;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+
+static bool HasWindowWithFileName(
+    string fileName)
+{
+    bool found = false;
+
+    NativeMethods.EnumWindows(
+        (window, parameter) =>
+        {
+            if (!NativeMethods.IsWindowVisible(window))
+                return true;
+
+            StringBuilder title =
+                new(1024);
+
+            NativeMethods.GetWindowTextW(
+                window,
+                title,
+                title.Capacity
+            );
+
+            if (title.ToString().Contains(
+                fileName,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                found = true;
+                return false;
+            }
+
+            return true;
+        },
+        IntPtr.Zero
+    );
+
+    return found;
+}
 static async Task<ApiResult> GetDocumentInfo(
     string token,
     ApiContext api,
@@ -546,7 +681,10 @@ static void WriteResponse(
     output.Flush();
 }
 
-
+delegate bool EnumWindowsProc(
+    IntPtr hWnd,
+    IntPtr lParam
+);
 static class NativeMethods
 {
     [DllImport(
@@ -568,6 +706,40 @@ static class NativeMethods
     public static extern void CredFree(
         IntPtr buffer
     );
+    [DllImport(
+    "user32.dll",
+    CharSet = CharSet.Unicode)]
+public static extern int MessageBoxW(
+    IntPtr hWnd,
+    string text,
+    string caption,
+    uint type
+);
+
+
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool EnumWindows(
+    EnumWindowsProc callback,
+    IntPtr parameter
+);
+
+
+[DllImport(
+    "user32.dll",
+    CharSet = CharSet.Unicode)]
+public static extern int GetWindowTextW(
+    IntPtr hWnd,
+    StringBuilder text,
+    int maxCount
+);
+
+
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool IsWindowVisible(
+    IntPtr hWnd
+);
 }
 
 
