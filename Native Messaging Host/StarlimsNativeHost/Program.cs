@@ -64,22 +64,16 @@ while (true)
             fileBytes
         );
 
-if (result.FileAction == "readwrite")
-{
-    StartWorker(nativeRequest.Token, filePath);
-}
-
 Process.Start(new ProcessStartInfo
 {
     FileName = filePath,
     UseShellExecute = true
 });
 
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = filePath,
-            UseShellExecute = true
-        });
+if (result.FileAction == "readwrite")
+{
+    StartWorker(nativeRequest.Token, filePath);
+}
 
 
         WriteResponse(output, new
@@ -120,166 +114,45 @@ static async Task RunWorker(
     string token,
     string filePath)
 {
-    string fileName = Path.GetFileName(filePath);
-
-    object? automation = CreateUiAutomation();
-
-    bool detected = false;
-
-    for (int i = 0; i < 30; i++)
+    // Wait until another program has opened the file
+    while (!IsFileOpen(filePath))
     {
-        if (IsDocumentOpen(fileName, automation))
-        {
-            detected = true;
-            break;
-        }
-
-        await Task.Delay(500);
+        await Task.Delay(250);
     }
 
-    if (!detected)
-        return;
-
-    int closedChecks = 0;
-
-    while (closedChecks < 3)
+    // Wait until the file is closed again
+    while (IsFileOpen(filePath))
     {
-        await Task.Delay(500);
-
-        if (IsDocumentOpen(fileName, automation))
-            closedChecks = 0;
-        else
-            closedChecks++;
+        await Task.Delay(250);
     }
 
     NativeMethods.MessageBoxW(
         IntPtr.Zero,
-        $"{fileName} er lukka.",
+        $"{Path.GetFileName(filePath)} er lukka.",
         "STARLIMS LocalFS",
         0x40
     );
 }
-
-static object? CreateUiAutomation()
+static bool IsFileOpen(string filePath)
 {
     try
     {
-        Type? type = Type.GetTypeFromCLSID(
-            new Guid("FF48DBA4-60EF-4201-AA87-54103EEF594E")
+        using FileStream stream = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None
         );
 
-        return type == null
-            ? null
-            : Activator.CreateInstance(type);
+        return false;
     }
-    catch
+    catch (IOException)
     {
-        return null;
-    }
-}
-
-
-static bool IsDocumentOpen(
-    string fileName,
-    object? automation)
-{
-    if (HasWindowWithFileName(fileName))
         return true;
-
-    if (automation == null)
-        return false;
-
-    try
-    {
-        dynamic uia = automation;
-
-        const int UIA_ControlTypePropertyId = 30003;
-        const int UIA_TabItemControlTypeId = 50019;
-        const int TreeScope_Descendants = 4;
-
-        dynamic condition =
-            uia.CreatePropertyCondition(
-                UIA_ControlTypePropertyId,
-                UIA_TabItemControlTypeId
-            );
-
-        dynamic root =
-            uia.GetRootElement();
-
-        dynamic tabs =
-            root.FindAll(
-                TreeScope_Descendants,
-                condition
-            );
-
-        for (int i = 0; i < tabs.Length; i++)
-        {
-            dynamic tab = tabs.GetElement(i);
-
-            string name =
-                tab.CurrentName ?? "";
-
-            if (name.Contains(
-                fileName,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                File.AppendAllText(
-                    Path.Combine(
-                        Environment.GetFolderPath(
-                            Environment.SpecialFolder.MyDocuments
-                        ),
-                        "UIA_TABS.txt"
-                    ),
-                    name + Environment.NewLine
-                );
-                return true;
-            }
-        }
-
-        return false;
-    }
-    catch
-    {
-        return false;
     }
 }
 
 
-static bool HasWindowWithFileName(
-    string fileName)
-{
-    bool found = false;
-
-    NativeMethods.EnumWindows(
-        (window, parameter) =>
-        {
-            if (!NativeMethods.IsWindowVisible(window))
-                return true;
-
-            StringBuilder title =
-                new(1024);
-
-            NativeMethods.GetWindowTextW(
-                window,
-                title,
-                title.Capacity
-            );
-
-            if (title.ToString().Contains(
-                fileName,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                found = true;
-                return false;
-            }
-
-            return true;
-        },
-        IntPtr.Zero
-    );
-
-    return found;
-}
 static async Task<ApiResult> GetDocumentInfo(
     string token,
     ApiContext api,
@@ -605,7 +478,38 @@ static Credential ReadCredential(
 }
 
 
+static class NativeMethods
+{
+    [DllImport(
+        "Advapi32.dll",
+        EntryPoint = "CredReadW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CredReadW(
+        string target,
+        uint type,
+        uint flags,
+        out IntPtr credential
+    );
 
+    [DllImport(
+        "Advapi32.dll",
+        EntryPoint = "CredFree")]
+    public static extern void CredFree(
+        IntPtr buffer
+    );
+
+    [DllImport(
+        "user32.dll",
+        CharSet = CharSet.Unicode)]
+    public static extern int MessageBoxW(
+        IntPtr hWnd,
+        string text,
+        string caption,
+        uint type
+    );
+}
 
 static void WriteError(
     Exception ex)
@@ -704,67 +608,6 @@ static void WriteResponse(
 
     output.Write(data);
     output.Flush();
-}
-
-delegate bool EnumWindowsProc(
-    IntPtr hWnd,
-    IntPtr lParam
-);
-static class NativeMethods
-{
-    [DllImport(
-        "Advapi32.dll",
-        EntryPoint = "CredReadW",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool CredReadW(
-        string target,
-        uint type,
-        uint flags,
-        out IntPtr credential
-    );
-
-    [DllImport(
-        "Advapi32.dll",
-        EntryPoint = "CredFree")]
-    public static extern void CredFree(
-        IntPtr buffer
-    );
-    [DllImport(
-    "user32.dll",
-    CharSet = CharSet.Unicode)]
-public static extern int MessageBoxW(
-    IntPtr hWnd,
-    string text,
-    string caption,
-    uint type
-);
-
-
-[DllImport("user32.dll")]
-[return: MarshalAs(UnmanagedType.Bool)]
-public static extern bool EnumWindows(
-    EnumWindowsProc callback,
-    IntPtr parameter
-);
-
-
-[DllImport(
-    "user32.dll",
-    CharSet = CharSet.Unicode)]
-public static extern int GetWindowTextW(
-    IntPtr hWnd,
-    StringBuilder text,
-    int maxCount
-);
-
-
-[DllImport("user32.dll")]
-[return: MarshalAs(UnmanagedType.Bool)]
-public static extern bool IsWindowVisible(
-    IntPtr hWnd
-);
 }
 
 
