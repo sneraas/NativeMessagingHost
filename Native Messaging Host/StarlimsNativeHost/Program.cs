@@ -46,7 +46,7 @@ while (true)
         );
 
         Stamp("02_metadata_received",  JsonSerializer.Serialize(result));
-
+        Stamp("02_01_download_url", result.DownloadUrl);
         byte[] fileBytes = await DownloadFile(
             result.DownloadUrl,
             api,
@@ -156,6 +156,7 @@ static async Task<byte[]> DownloadFile(
     ApiContext api,
     HttpClient client)
 {
+    Stamp(url)
     string timestamp =
         DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
 
@@ -189,7 +190,12 @@ static async Task<byte[]> DownloadFile(
             api.SecretKey
         )
     );
-
+    Stamp(
+    "DOWNLOAD_HTTP",
+    $"URL: {resp.RequestMessage?.RequestUri}\n" +
+    $"Status: {(int)resp.StatusCode}\n" +
+    $"Content-Type: {resp.Content.Headers.ContentType}"
+);
     using HttpResponseMessage resp =
         await client.SendAsync(req);
 
