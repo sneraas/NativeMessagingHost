@@ -9,6 +9,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+
+if (args.Length > 0 && args[0] == "--worker")
+{
+    await RunWorker(args[1], args[2]);
+    return;
+}
+
 using Stream input = Console.OpenStandardInput();
 using Stream output = Console.OpenStandardOutput();
 
@@ -28,7 +35,6 @@ while (true)
         if (json == null)
             break;
 
-        Stamp("01_message_received", json);
 
         NativeRequest nativeRequest =
             JsonSerializer.Deserialize<NativeRequest>(json)
@@ -45,20 +51,12 @@ while (true)
             client
         );
 
-        Stamp("02_metadata_received",  JsonSerializer.Serialize(result));
-        Stamp("02_01_download_url", result.DownloadUrl);
         byte[] fileBytes = await DownloadFile(
             result.DownloadUrl,
             api,
             client
         );
 
-        Stamp(
-            "03_binary_downloaded",
-            $"Size: {fileBytes.Length} bytes\n" +
-            $"First 100 bytes: {Convert.ToHexString(fileBytes.Take(100).ToArray())}\n" +
-            $"As text: {Encoding.UTF8.GetString(fileBytes.Take(1000).ToArray())}"
-        );
 
         string filePath = SaveFile(
             result,
@@ -66,12 +64,10 @@ while (true)
             fileBytes
         );
 
-        Stamp(
-            "04_file_saved",
-            $"Downloaded: {fileBytes.Length} bytes\n" +
-            $"Saved: {new FileInfo(filePath).Length} bytes\n" +
-            $"Identical: {fileBytes.SequenceEqual(File.ReadAllBytes(filePath))}"
-        );
+  if (result.FileAction == "readwrite")
+{
+    StartWorker(nativeRequest.Token, filePath);
+}
 
         Process.Start(new ProcessStartInfo
         {
@@ -79,7 +75,6 @@ while (true)
             UseShellExecute = true
         });
 
-        Stamp("05_process_started");
 
         WriteResponse(output, new
         {
@@ -99,7 +94,25 @@ while (true)
         });
     }
 }
+static void StartWorker(string token, string filePath)
+{
+    Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        Arguments = $"--worker \"{token}\" \"{filePath}\"",
+        UseShellExecute = true
+    });
+}
 
+static async Task RunWorker(
+    string token,
+    string filePath)
+{
+    while (File.Exists(filePath))
+    {
+        await Task.Delay(1000);
+    }
+}
 
 static async Task<ApiResult> GetDocumentInfo(
     string token,
@@ -107,9 +120,10 @@ static async Task<ApiResult> GetDocumentInfo(
     HttpClient client)
 {
     string url =
-        api.ApiRoot +
-        "v1/Folders/SendDocumentToClient" +
-        $"?token={WebUtility.UrlEncode(token)}";
+    api.ApiRoot +
+    "v1/Folders/SendDocumentToClient" +
+    $"?token={WebUtility.UrlEncode(token)}" +
+    $"&accessKey={WebUtility.UrlEncode(api.AccessKey)}";
 
     using HttpRequestMessage request =
         CreateSignedGet(
@@ -190,16 +204,17 @@ static async Task<byte[]> DownloadFile(
             api.SecretKey
         )
     );
-    using HttpResponseMessage resp =
-        await client.SendAsync(req);
+   using HttpResponseMessage resp =
+    await client.SendAsync(req);
 
-    Stamp(
-    "DOWNLOAD_HTTP",
-    $"URL: {resp.RequestMessage?.RequestUri}\n" +
-    $"Status: {(int)resp.StatusCode}\n" +
-    $"Content-Type: {resp.Content.Headers.ContentType}"
-);
-    return await resp.Content.ReadAsByteArrayAsync();
+byte[] bytes = await resp.Content.ReadAsByteArrayAsync();
+
+
+
+if (!resp.IsSuccessStatusCode)
+    throw new Exception($"Download failed: {(int)resp.StatusCode}");
+
+return bytes;
 }
 
 
@@ -424,20 +439,6 @@ static Credential ReadCredential(
 }
 
 
-static void Stamp(
-    string name,
-    string content = "")
-{
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.MyDocuments
-            ),
-            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{name}.txt"
-        ),
-        content
-    );
-}
 
 
 static void WriteError(
