@@ -190,15 +190,15 @@ static async Task<byte[]> DownloadFile(
             api.SecretKey
         )
     );
+    using HttpResponseMessage resp =
+        await client.SendAsync(req);
+
     Stamp(
     "DOWNLOAD_HTTP",
     $"URL: {resp.RequestMessage?.RequestUri}\n" +
     $"Status: {(int)resp.StatusCode}\n" +
     $"Content-Type: {resp.Content.Headers.ContentType}"
 );
-    using HttpResponseMessage resp =
-        await client.SendAsync(req);
-
     return await resp.Content.ReadAsByteArrayAsync();
 }
 
