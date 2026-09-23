@@ -478,38 +478,6 @@ static Credential ReadCredential(
 }
 
 
-static class NativeMethods
-{
-    [DllImport(
-        "Advapi32.dll",
-        EntryPoint = "CredReadW",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool CredReadW(
-        string target,
-        uint type,
-        uint flags,
-        out IntPtr credential
-    );
-
-    [DllImport(
-        "Advapi32.dll",
-        EntryPoint = "CredFree")]
-    public static extern void CredFree(
-        IntPtr buffer
-    );
-
-    [DllImport(
-        "user32.dll",
-        CharSet = CharSet.Unicode)]
-    public static extern int MessageBoxW(
-        IntPtr hWnd,
-        string text,
-        string caption,
-        uint type
-    );
-}
 
 static void WriteError(
     Exception ex)
@@ -610,6 +578,38 @@ static void WriteResponse(
     output.Flush();
 }
 
+static class NativeMethods
+{
+    [DllImport(
+        "Advapi32.dll",
+        EntryPoint = "CredReadW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CredReadW(
+        string target,
+        uint type,
+        uint flags,
+        out IntPtr credential
+    );
+
+    [DllImport(
+        "Advapi32.dll",
+        EntryPoint = "CredFree")]
+    public static extern void CredFree(
+        IntPtr buffer
+    );
+
+    [DllImport(
+        "user32.dll",
+        CharSet = CharSet.Unicode)]
+    public static extern int MessageBoxW(
+        IntPtr hWnd,
+        string text,
+        string caption,
+        uint type
+    );
+}
 
 [StructLayout(
     LayoutKind.Sequential,
