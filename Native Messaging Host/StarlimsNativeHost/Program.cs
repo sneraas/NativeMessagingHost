@@ -184,6 +184,7 @@ static async Task<byte[]> DownloadFile(
         await client.SendAsync(req);
 
     return await resp.Content.ReadAsByteArrayAsync();
+}
 
 
 static HttpRequestMessage CreateSignedGet(
