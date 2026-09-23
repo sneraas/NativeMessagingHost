@@ -147,46 +147,62 @@ static async Task<byte[]> DownloadFile(
 {
     File.WriteAllText(
         Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.MyDocuments
-            ),
-            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{url}.txt"
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_download.txt"
         ),
-        ""
+        url
     );
-    File.WriteAllText(
-        Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.MyDocuments
-            ),
-            $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}_{api.AccessKey}.txt"
-        ),
-        ""
+
+    string timestamp =
+        DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+
+    string signature =
+        ComputeSignature(
+            url,
+            "GET",
+            api.AccessKey,
+            timestamp,
+            "",
+            api.SecretKey
+        );
+
+    using HttpRequestMessage request =
+        new(HttpMethod.Get, url);
+
+    request.Content =
+        new ByteArrayContent(Array.Empty<byte>());
+
+    request.Content.Headers.ContentType =
+        new MediaTypeHeaderValue("text/plain");
+
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Auth",
+        api.AccessKey
     );
-    HttpWebRequest req = WebRequest.CreateHttp(url);
 
-    req.Method = "GET";
-    req.ContentType = "text/plain";
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Timestamp",
+        timestamp
+    );
 
-    req.Headers.Add("SL-API-Auth", api.AccessKey);
-    req.Headers.Add("SL-API-Timestamp", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"));
+    request.Headers.TryAddWithoutValidation(
+        "SL-API-Signature",
+        signature
+    );
 
-    req.Headers.Add("SL-API-Signature", ComputeSignature(req, ""));
+    using HttpResponseMessage response =
+        await client.SendAsync(request);
 
-    HttpWebResponse resp = (HttpWebResponse)req.GetResponse();
-    Assert.AreEqual(HttpStatusCode.OK, resp.StatusCode);
-
-    string localPath = Path.GetTempFileName();
-
-    using (MemoryStream stream = new MemoryStream())
+    if (!response.IsSuccessStatusCode)
     {
-        resp.GetResponseStream().CopyTo(stream);
-        File.WriteAllBytes(localPath, stream.ToArray());
+        throw new Exception(
+            $"Download API returned {(int)response.StatusCode}: " +
+            await response.Content.ReadAsStringAsync()
+        );
     }
 
-    return localPath;
+    return await response.Content.ReadAsByteArrayAsync();
 }
-
 
 
 static string ComputeSignature(
