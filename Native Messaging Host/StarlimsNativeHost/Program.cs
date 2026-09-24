@@ -395,52 +395,49 @@ static async Task<string> ComputeUploadSignature(
     byte[] suffixBytes =
         Encoding.UTF8.GetBytes("\"}");
 
-    using HMACSHA256 hmac = new(
-        Encoding.UTF8.GetBytes(secretKey)
+    using IncrementalHash hash =
+        IncrementalHash.CreateHMAC(
+            HashAlgorithmName.SHA256,
+            Encoding.UTF8.GetBytes(secretKey)
+        );
+
+    hash.AppendData(metadata);
+    hash.AppendData(prefixBytes);
+
+    await using FileStream input = new(
+        filePath,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.Read,
+        81920,
+        FileOptions.Asynchronous |
+        FileOptions.SequentialScan
     );
 
+    await using HashWriteStream hashStream =
+        new(hash);
+
+    using ToBase64Transform transform = new();
+
     await using (
-        CryptoStream hmacStream = new(
-            Stream.Null,
-            hmac,
-            CryptoStreamMode.Write
+        CryptoStream base64Stream = new(
+            hashStream,
+            transform,
+            CryptoStreamMode.Write,
+            true
         )
     )
     {
-        await hmacStream.WriteAsync(metadata);
-        await hmacStream.WriteAsync(prefixBytes);
-
-        await using FileStream input = new(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            81920,
-            FileOptions.Asynchronous |
-            FileOptions.SequentialScan
-        );
-
-        using ToBase64Transform transform = new();
-
-        await using (
-            CryptoStream base64Stream = new(
-                hmacStream,
-                transform,
-                CryptoStreamMode.Write,
-                true
-            )
-        )
-        {
-            await input.CopyToAsync(base64Stream);
-        }
-
-        await hmacStream.WriteAsync(suffixBytes);
+        await input.CopyToAsync(base64Stream);
     }
 
+    hash.AppendData(suffixBytes);
+
+    byte[] signature =
+        hash.GetHashAndReset();
+
     return WebUtility.UrlEncode(
-        Convert.ToBase64String(
-            hmac.Hash!
-        )
+        Convert.ToBase64String(signature)
     );
 }
 
@@ -999,7 +996,96 @@ sealed class StreamingJsonFileContent : HttpContent
                 "application/json"
             );
     }
+sealed class HashWriteStream : Stream
+{
+    private readonly IncrementalHash hash;
 
+    public HashWriteStream(
+        IncrementalHash hash)
+    {
+        this.hash = hash;
+    }
+
+    public override void Write(
+        byte[] buffer,
+        int offset,
+        int count)
+    {
+        hash.AppendData(
+            buffer,
+            offset,
+            count
+        );
+    }
+
+    public override ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        hash.AppendData(buffer.Span);
+
+        return ValueTask.CompletedTask;
+    }
+
+    public override Task WriteAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        hash.AppendData(
+            buffer,
+            offset,
+            count
+        );
+
+        return Task.CompletedTask;
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override Task FlushAsync(
+        CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+
+    public override long Length =>
+        throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(
+        byte[] buffer,
+        int offset,
+        int count)
+    {
+        throw new NotSupportedException();
+    }
+
+    public override long Seek(
+        long offset,
+        SeekOrigin origin)
+    {
+        throw new NotSupportedException();
+    }
+
+    public override void SetLength(
+        long value)
+    {
+        throw new NotSupportedException();
+    }
+}
     protected override async Task SerializeToStreamAsync(
         Stream stream,
         TransportContext? context)
