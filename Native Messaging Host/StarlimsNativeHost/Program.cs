@@ -180,82 +180,110 @@ static async Task UploadFile(
     string token,
     string filePath)
 {
-    ApiContext api = GetApiContext(
-        "DEV_API_KEY",
-        "DEV_API_SECRET"
-    );
-
-    using HttpClientHandler handler = new()
+    try
     {
-        UseDefaultCredentials = true
-    };
-
-    using HttpClient client = new(handler);
-
-    string url =
-        api.ApiRoot +
-        "v1/Folders/getDocumentFromClient";
-
-    string file =
-        Convert.ToBase64String(
-            await File.ReadAllBytesAsync(filePath)
+        ApiContext api = GetApiContext(
+            "DEV_API_KEY",
+            "DEV_API_SECRET"
         );
 
-    string json =
-        JsonSerializer.Serialize(new
+        using HttpClientHandler handler = new()
         {
-            token,
-            file
-        });
+            UseDefaultCredentials = true
+        };
 
-    string timestamp =
-        DateTime.UtcNow.ToString(
-            "yyyy-MM-ddTHH:mm:ss.fffZ"
+        using HttpClient client = new(handler);
+
+        string url =
+            api.ApiRoot +
+            "v1/Folders/getDocumentFromClient";
+
+        byte[] fileBytes =
+            await File.ReadAllBytesAsync(filePath);
+
+        string file =
+            Convert.ToBase64String(fileBytes);
+
+        string json =
+            JsonSerializer.Serialize(new
+            {
+                token,
+                file
+            });
+
+        string timestamp =
+            DateTime.UtcNow.ToString(
+                "yyyy-MM-ddTHH:mm:ss.fffZ"
+            );
+
+        using HttpRequestMessage request =
+            new(HttpMethod.Post, url);
+
+        request.Content =
+            new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json"
+            );
+
+        request.Headers.Add(
+            "SL-API-Auth",
+            api.AccessKey
         );
 
-    using HttpRequestMessage request =
-        new(HttpMethod.Post, url);
-
-    request.Content =
-        new StringContent(
-            json,
-            Encoding.UTF8,
-            "application/json"
+        request.Headers.Add(
+            "SL-API-Timestamp",
+            timestamp
         );
 
-    request.Headers.Add(
-        "SL-API-Auth",
-        api.AccessKey
-    );
+        request.Headers.Add(
+            "SL-API-Signature",
+            ComputeSignature(
+                url,
+                "POST",
+                api.AccessKey,
+                timestamp,
+                json,
+                api.SecretKey
+            )
+        );
 
-    request.Headers.Add(
-        "SL-API-Timestamp",
-        timestamp
-    );
+        using HttpResponseMessage response =
+            await client.SendAsync(request);
 
-    request.Headers.Add(
-        "SL-API-Signature",
-        ComputeSignature(
-            url,
-            "POST",
-            api.AccessKey,
-            timestamp,
-            json,
-            api.SecretKey
-        )
-    );
-
-    using HttpResponseMessage response =
-        await client.SendAsync(request);
-
-    if (!response.IsSuccessStatusCode)
-    {
-        string error =
+        string responseBody =
             await response.Content.ReadAsStringAsync();
 
-        throw new Exception(
-            $"Upload failed {(int)response.StatusCode}: {error}"
+        NativeMethods.MessageBoxW(
+            IntPtr.Zero,
+            $"Status: {(int)response.StatusCode} {response.StatusCode}\n\n" +
+            $"Token: {token}\n" +
+            $"File size: {fileBytes.Length} bytes\n\n" +
+            $"Response:\n{responseBody}",
+            "STARLIMS Upload",
+            response.IsSuccessStatusCode ? 0x40u : 0x10u
         );
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception(
+                $"Upload failed: {(int)response.StatusCode} " +
+                $"{response.StatusCode}\n{responseBody}"
+            );
+        }
+    }
+    catch (Exception ex)
+    {
+        NativeMethods.MessageBoxW(
+            IntPtr.Zero,
+            ex.ToString(),
+            "STARLIMS Upload ERROR",
+            0x10
+        );
+
+        WriteError(ex);
+
+        throw;
     }
 }
 
