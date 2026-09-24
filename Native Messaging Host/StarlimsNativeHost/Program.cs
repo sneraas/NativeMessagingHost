@@ -199,7 +199,7 @@ static async Task UploadFile(
             "v1/Folders/getDocumentFromClient";
 
         byte[] fileBytes =
-            await File.ReadAllBytesAsync(filePath);
+            await ReadFileBytes(filePath);
 
         string file =
             Convert.ToBase64String(fileBytes);
@@ -288,7 +288,31 @@ static async Task UploadFile(
 }
 
 
+static async Task<byte[]> ReadFileBytes(string filePath)
+{
+    while (true)
+    {
+        try
+        {
+            await using FileStream stream = new(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete
+            );
 
+            using MemoryStream memory = new();
+
+            await stream.CopyToAsync(memory);
+
+            return memory.ToArray();
+        }
+        catch (IOException)
+        {
+            await Task.Delay(100);
+        }
+    }
+}
 
 
 static bool IsFileOpen(string filePath)
