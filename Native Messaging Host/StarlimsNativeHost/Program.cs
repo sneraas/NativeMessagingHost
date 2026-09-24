@@ -51,19 +51,13 @@ while (true)
             client
         );
 
-        byte[] fileBytes = await DownloadFile(
+        string filePath = await DownloadFile(
             result.DownloadUrl,
+            result,
+            nativeRequest.Token,
             api,
             client
         );
-
-
-        string filePath = SaveFile(
-            result,
-            nativeRequest.Token,
-            fileBytes
-        );
-
 Process.Start(new ProcessStartInfo
 {
     FileName = filePath,
@@ -131,12 +125,12 @@ static async Task RunWorker(
 
         if (currentWriteTime != lastWriteTime)
         {
-            lastWriteTime = currentWriteTime;
-
             await UploadFile(
                 token,
                 filePath
             );
+
+            lastWriteTime = currentWriteTime;
         }
 
         await Task.Delay(250);
@@ -180,8 +174,13 @@ static async Task UploadFile(
     string token,
     string filePath)
 {
+    string? snapshotPath = null;
+
     try
     {
+        snapshotPath =
+            await CreateUploadSnapshot(filePath);
+
         ApiContext api = GetApiContext(
             "DEV_API_KEY",
             "DEV_API_SECRET"
@@ -192,38 +191,40 @@ static async Task UploadFile(
             UseDefaultCredentials = true
         };
 
-        using HttpClient client = new(handler);
+        using HttpClient client =
+            new(handler);
 
         string url =
             api.ApiRoot +
             "v1/Folders/getDocumentFromClient";
 
-        byte[] fileBytes =
-            await ReadFileBytes(filePath);
-
-        string file =
-            Convert.ToBase64String(fileBytes);
-
-        string json =
-            JsonSerializer.Serialize(new
-            {
-                token,
-                file
-            });
+        string prefix =
+            "{\"token\":" +
+            JsonSerializer.Serialize(token) +
+            ",\"file\":\"";
 
         string timestamp =
             DateTime.UtcNow.ToString(
                 "yyyy-MM-ddTHH:mm:ss.fffZ"
             );
 
+        string signature =
+            await ComputeUploadSignature(
+                url,
+                api.AccessKey,
+                timestamp,
+                prefix,
+                snapshotPath,
+                api.SecretKey
+            );
+
         using HttpRequestMessage request =
             new(HttpMethod.Post, url);
 
         request.Content =
-            new StringContent(
-                json,
-                Encoding.UTF8,
-                "application/json"
+            new StreamingJsonFileContent(
+                prefix,
+                snapshotPath
             );
 
         request.Headers.Add(
@@ -238,14 +239,7 @@ static async Task UploadFile(
 
         request.Headers.Add(
             "SL-API-Signature",
-            ComputeSignature(
-                url,
-                "POST",
-                api.AccessKey,
-                timestamp,
-                json,
-                api.SecretKey
-            )
+            signature
         );
 
         using HttpResponseMessage response =
@@ -258,10 +252,12 @@ static async Task UploadFile(
             IntPtr.Zero,
             $"Status: {(int)response.StatusCode} {response.StatusCode}\n\n" +
             $"Token: {token}\n" +
-            $"File size: {fileBytes.Length} bytes\n\n" +
+            $"File size: {new FileInfo(snapshotPath).Length} bytes\n\n" +
             $"Response:\n{responseBody}",
             "STARLIMS Upload",
-            response.IsSuccessStatusCode ? 0x40u : 0x10u
+            response.IsSuccessStatusCode
+                ? 0x40u
+                : 0x10u
         );
 
         if (!response.IsSuccessStatusCode)
@@ -285,33 +281,169 @@ static async Task UploadFile(
 
         throw;
     }
+    finally
+    {
+        if (snapshotPath != null)
+        {
+            try
+            {
+                File.Delete(snapshotPath);
+            }
+            catch
+            {
+            }
+        }
+    }
 }
 
 
-static async Task<byte[]> ReadFileBytes(string filePath)
+static async Task<string> CreateUploadSnapshot(
+    string filePath)
 {
+    string snapshotPath =
+        filePath + ".uploading";
+
     while (true)
     {
         try
         {
-            await using FileStream stream = new(
-                filePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete
-            );
+            DateTime writeTimeBefore =
+                File.GetLastWriteTimeUtc(filePath);
 
-            using MemoryStream memory = new();
+            long lengthBefore =
+                new FileInfo(filePath).Length;
 
-            await stream.CopyToAsync(memory);
+            await using (
+                FileStream input = new(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite |
+                    FileShare.Delete,
+                    81920,
+                    FileOptions.Asynchronous |
+                    FileOptions.SequentialScan
+                )
+            )
+            await using (
+                FileStream output = new(
+                    snapshotPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    81920,
+                    FileOptions.Asynchronous |
+                    FileOptions.SequentialScan
+                )
+            )
+            {
+                await input.CopyToAsync(output);
+                await output.FlushAsync();
+            }
 
-            return memory.ToArray();
+            DateTime writeTimeAfter =
+                File.GetLastWriteTimeUtc(filePath);
+
+            long lengthAfter =
+                new FileInfo(filePath).Length;
+
+            if (
+                writeTimeBefore == writeTimeAfter &&
+                lengthBefore == lengthAfter
+            )
+            {
+                return snapshotPath;
+            }
         }
         catch (IOException)
         {
-            await Task.Delay(100);
         }
+
+        try
+        {
+            File.Delete(snapshotPath);
+        }
+        catch
+        {
+        }
+
+        await Task.Delay(100);
     }
+}
+
+
+static async Task<string> ComputeUploadSignature(
+    string url,
+    string accessKey,
+    string timestamp,
+    string prefix,
+    string filePath,
+    string secretKey)
+{
+    byte[] metadata =
+        Encoding.UTF8.GetBytes(
+            $"{url}\n" +
+            $"POST\n" +
+            $"{accessKey}\n" +
+            $"\n" +
+            $"{timestamp}\n"
+        );
+
+    byte[] prefixBytes =
+        Encoding.UTF8.GetBytes(prefix);
+
+    byte[] suffixBytes =
+        Encoding.UTF8.GetBytes("\"}");
+
+    using HMACSHA256 hmac = new(
+        Encoding.UTF8.GetBytes(secretKey)
+    );
+
+    await using CryptoStream hmacStream = new(
+        Stream.Null,
+        hmac,
+        CryptoStreamMode.Write,
+        true
+    );
+
+    await hmacStream.WriteAsync(metadata);
+    await hmacStream.WriteAsync(prefixBytes);
+
+    await using (
+        FileStream input = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            81920,
+            FileOptions.Asynchronous |
+            FileOptions.SequentialScan
+        )
+    )
+    {
+        using ToBase64Transform transform = new();
+
+        await using CryptoStream base64Stream = new(
+            hmacStream,
+            transform,
+            CryptoStreamMode.Write,
+            true
+        );
+
+        await input.CopyToAsync(base64Stream);
+
+        base64Stream.FlushFinalBlock();
+    }
+
+    await hmacStream.WriteAsync(suffixBytes);
+
+    hmacStream.FlushFinalBlock();
+
+    return WebUtility.UrlEncode(
+        Convert.ToBase64String(
+            hmac.Hash!
+        )
+    );
 }
 
 
@@ -386,35 +518,54 @@ static async Task<ApiResult> GetDocumentInfo(
 
 
 
-static async Task<byte[]> DownloadFile(
+static async Task<string> DownloadFile(
     string url,
+    ApiResult result,
+    string token,
     ApiContext api,
     HttpClient client)
 {
-    
-    string timestamp =
-        DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+    string folder =
+        result.FileAction == "readwrite"
+            ? Path.Combine(
+                result.ClientFilePath,
+                token
+            )
+            : result.ClientFilePath;
 
-    using HttpRequestMessage req =
+    Directory.CreateDirectory(folder);
+
+    string filePath =
+        Path.Combine(
+            folder,
+            Path.GetFileName(result.FileName)
+        );
+
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fffZ"
+        );
+
+    using HttpRequestMessage request =
         new(HttpMethod.Get, url);
 
-    req.Content =
+    request.Content =
         new StringContent("");
 
-    req.Content.Headers.ContentType =
+    request.Content.Headers.ContentType =
         new MediaTypeHeaderValue("text/plain");
 
-    req.Headers.Add(
+    request.Headers.Add(
         "SL-API-Auth",
         api.AccessKey
     );
 
-    req.Headers.Add(
+    request.Headers.Add(
         "SL-API-Timestamp",
         timestamp
     );
 
-    req.Headers.Add(
+    request.Headers.Add(
         "SL-API-Signature",
         ComputeSignature(
             url,
@@ -425,17 +576,36 @@ static async Task<byte[]> DownloadFile(
             api.SecretKey
         )
     );
-   using HttpResponseMessage resp =
-    await client.SendAsync(req);
 
-byte[] bytes = await resp.Content.ReadAsByteArrayAsync();
+    using HttpResponseMessage response =
+        await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead
+        );
 
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new Exception(
+            $"Download failed: {(int)response.StatusCode}"
+        );
+    }
 
+    await using Stream input =
+        await response.Content.ReadAsStreamAsync();
 
-if (!resp.IsSuccessStatusCode)
-    throw new Exception($"Download failed: {(int)resp.StatusCode}");
+    await using FileStream output = new(
+        filePath,
+        FileMode.Create,
+        FileAccess.Write,
+        FileShare.None,
+        81920,
+        FileOptions.Asynchronous |
+        FileOptions.SequentialScan
+    );
 
-return bytes;
+    await input.CopyToAsync(output);
+
+    return filePath;
 }
 
 
@@ -844,7 +1014,81 @@ sealed class ApiResponse
     [JsonPropertyName("Result")]
     public List<ApiResult> Result { get; set; } = [];
 }
+sealed class StreamingJsonFileContent : HttpContent
+{
+    private readonly string prefix;
+    private readonly string filePath;
 
+    public StreamingJsonFileContent(
+        string prefix,
+        string filePath)
+    {
+        this.prefix = prefix;
+        this.filePath = filePath;
+
+        Headers.ContentType =
+            new MediaTypeHeaderValue(
+                "application/json"
+            );
+    }
+
+    protected override async Task SerializeToStreamAsync(
+        Stream stream,
+        TransportContext? context)
+    {
+        byte[] prefixBytes =
+            Encoding.UTF8.GetBytes(prefix);
+
+        await stream.WriteAsync(prefixBytes);
+
+        await using FileStream input = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            81920,
+            FileOptions.Asynchronous |
+            FileOptions.SequentialScan
+        );
+
+        using ToBase64Transform transform = new();
+
+        await using (
+            CryptoStream base64Stream = new(
+                stream,
+                transform,
+                CryptoStreamMode.Write,
+                true
+            )
+        )
+        {
+            await input.CopyToAsync(base64Stream);
+
+            base64Stream.FlushFinalBlock();
+        }
+
+        await stream.WriteAsync(
+            Encoding.UTF8.GetBytes("\"}")
+        );
+    }
+
+    protected override bool TryComputeLength(
+        out long length)
+    {
+        long fileLength =
+            new FileInfo(filePath).Length;
+
+        long base64Length =
+            ((fileLength + 2) / 3) * 4;
+
+        length =
+            Encoding.UTF8.GetByteCount(prefix) +
+            base64Length +
+            2;
+
+        return true;
+    }
+}
 
 sealed class ApiResult
 {
