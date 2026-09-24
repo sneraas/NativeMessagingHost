@@ -979,23 +979,6 @@ sealed class ApiResponse
     [JsonPropertyName("Result")]
     public List<ApiResult> Result { get; set; } = [];
 }
-sealed class StreamingJsonFileContent : HttpContent
-{
-    private readonly string prefix;
-    private readonly string filePath;
-
-    public StreamingJsonFileContent(
-        string prefix,
-        string filePath)
-    {
-        this.prefix = prefix;
-        this.filePath = filePath;
-
-        Headers.ContentType =
-            new MediaTypeHeaderValue(
-                "application/json"
-            );
-    }
 sealed class HashWriteStream : Stream
 {
     private readonly IncrementalHash hash;
@@ -1086,6 +1069,26 @@ sealed class HashWriteStream : Stream
         throw new NotSupportedException();
     }
 }
+
+
+sealed class StreamingJsonFileContent : HttpContent
+{
+    private readonly string prefix;
+    private readonly string filePath;
+
+    public StreamingJsonFileContent(
+        string prefix,
+        string filePath)
+    {
+        this.prefix = prefix;
+        this.filePath = filePath;
+
+        Headers.ContentType =
+            new MediaTypeHeaderValue(
+                "application/json"
+            );
+    }
+
     protected override async Task SerializeToStreamAsync(
         Stream stream,
         TransportContext? context)
@@ -1141,7 +1144,6 @@ sealed class HashWriteStream : Stream
         return true;
     }
 }
-
 sealed class ApiResult
 {
     [JsonPropertyName("CLIENT_FILE_PATH")]
