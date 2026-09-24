@@ -180,15 +180,89 @@ static async Task UploadFile(
     string token,
     string filePath)
 {
-    // API upload goes here later
-    NativeMethods.MessageBoxW(
-        IntPtr.Zero,
-        $"{Path.GetFileName(filePath)} er lagret.",
-        "STARLIMS LocalFS",
-        0x40
+    ApiContext api = GetApiContext(
+        "DEV_API_KEY",
+        "DEV_API_SECRET"
     );
-    await Task.CompletedTask;
+
+    using HttpClientHandler handler = new()
+    {
+        UseDefaultCredentials = true
+    };
+
+    using HttpClient client = new(handler);
+
+    string url =
+        api.ApiRoot +
+        "v1/Folders/getDocumentFromClient";
+
+    string file =
+        Convert.ToBase64String(
+            await File.ReadAllBytesAsync(filePath)
+        );
+
+    string json =
+        JsonSerializer.Serialize(new
+        {
+            token,
+            file
+        });
+
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fffZ"
+        );
+
+    using HttpRequestMessage request =
+        new(HttpMethod.Post, url);
+
+    request.Content =
+        new StringContent(
+            json,
+            Encoding.UTF8,
+            "application/json"
+        );
+
+    request.Headers.Add(
+        "SL-API-Auth",
+        api.AccessKey
+    );
+
+    request.Headers.Add(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    request.Headers.Add(
+        "SL-API-Signature",
+        ComputeSignature(
+            url,
+            "POST",
+            api.AccessKey,
+            timestamp,
+            json,
+            api.SecretKey
+        )
+    );
+
+    using HttpResponseMessage response =
+        await client.SendAsync(request);
+
+    if (!response.IsSuccessStatusCode)
+    {
+        string error =
+            await response.Content.ReadAsStringAsync();
+
+        throw new Exception(
+            $"Upload failed {(int)response.StatusCode}: {error}"
+        );
+    }
 }
+
+
+
+
+
 static bool IsFileOpen(string filePath)
 {
     try
