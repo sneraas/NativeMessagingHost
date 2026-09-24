@@ -140,23 +140,22 @@ static async Task RunWorker(
     // just before the file was closed
     DateTime finalWriteTime =
         File.GetLastWriteTimeUtc(filePath);
-
-    if (finalWriteTime != lastWriteTime)
-    {
-        await UploadFile(
-            token,
-            filePath
-        );
-
-
-    }
-
-    NativeMethods.MessageBoxW(
-        IntPtr.Zero,
-        $"{Path.GetFileName(filePath)} er lukka.",
-        "STARLIMS LocalFS",
-        0x40
+if (finalWriteTime != lastWriteTime)
+{
+    await UploadFile(
+        token,
+        filePath
     );
+}
+
+await EndClientFileHandling(token);
+
+NativeMethods.MessageBoxW(
+    IntPtr.Zero,
+    $"{Path.GetFileName(filePath)} er lukka.",
+    "STARLIMS LocalFS",
+    0x40
+);
     string folderPath =
     Path.GetDirectoryName(filePath)!;
 
@@ -296,7 +295,84 @@ static async Task UploadFile(
     }
 }
 
+static async Task EndClientFileHandling(
+    string token)
+{
+    ApiContext api = GetApiContext(
+        "DEV_API_KEY",
+        "DEV_API_SECRET"
+    );
 
+    using HttpClientHandler handler = new()
+    {
+        UseDefaultCredentials = true
+    };
+
+    using HttpClient client =
+        new(handler);
+
+    string url =
+        api.ApiRoot +
+        "v1/Folders/endClientFileHandling";
+
+    string json =
+        JsonSerializer.Serialize(new
+        {
+            token
+        });
+
+    string timestamp =
+        DateTime.UtcNow.ToString(
+            "yyyy-MM-ddTHH:mm:ss.fffZ"
+        );
+
+    using HttpRequestMessage request =
+        new(HttpMethod.Post, url);
+
+    request.Content =
+        new StringContent(
+            json,
+            Encoding.UTF8,
+            "application/json"
+        );
+
+    request.Headers.Add(
+        "SL-API-Auth",
+        api.AccessKey
+    );
+
+    request.Headers.Add(
+        "SL-API-Timestamp",
+        timestamp
+    );
+
+    request.Headers.Add(
+        "SL-API-Signature",
+        ComputeSignature(
+            url,
+            "POST",
+            api.AccessKey,
+            timestamp,
+            json,
+            api.SecretKey
+        )
+    );
+
+    using HttpResponseMessage response =
+        await client.SendAsync(request);
+
+    string body =
+        await response.Content.ReadAsStringAsync();
+
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new Exception(
+            $"End file handling failed: " +
+            $"{(int)response.StatusCode} " +
+            $"{response.StatusCode}\n{body}"
+        );
+    }
+}
 static async Task<string> CreateUploadSnapshot(
     string filePath)
 {
