@@ -120,10 +120,41 @@ static async Task RunWorker(
         await Task.Delay(250);
     }
 
-    // Wait until the file is closed again
+    DateTime lastWriteTime =
+        File.GetLastWriteTimeUtc(filePath);
+
+    // Stay alive while the file is open
     while (IsFileOpen(filePath))
     {
+        DateTime currentWriteTime =
+            File.GetLastWriteTimeUtc(filePath);
+
+        if (currentWriteTime != lastWriteTime)
+        {
+            lastWriteTime = currentWriteTime;
+
+            await UploadFile(
+                token,
+                filePath
+            );
+        }
+
         await Task.Delay(250);
+    }
+
+    // Final check in case the last save happened
+    // just before the file was closed
+    DateTime finalWriteTime =
+        File.GetLastWriteTimeUtc(filePath);
+
+    if (finalWriteTime != lastWriteTime)
+    {
+        await UploadFile(
+            token,
+            filePath
+        );
+
+
     }
 
     NativeMethods.MessageBoxW(
@@ -132,6 +163,31 @@ static async Task RunWorker(
         "STARLIMS LocalFS",
         0x40
     );
+    string folderPath =
+    Path.GetDirectoryName(filePath)!;
+
+    File.Delete(filePath);
+
+    Directory.Delete(
+        folderPath,
+        true
+    );
+
+}
+
+
+static async Task UploadFile(
+    string token,
+    string filePath)
+{
+    // API upload goes here later
+    NativeMethods.MessageBoxW(
+        IntPtr.Zero,
+        $"{Path.GetFileName(filePath)} er lagret.",
+        "STARLIMS LocalFS",
+        0x40
+    );
+    await Task.CompletedTask;
 }
 static bool IsFileOpen(string filePath)
 {
