@@ -431,8 +431,6 @@ static async Task<string> ComputeUploadSignature(
         );
 
         await input.CopyToAsync(base64Stream);
-
-        base64Stream.FlushFinalBlock();
     }
 
     await hmacStream.WriteAsync(suffixBytes);
@@ -698,36 +696,7 @@ static string ComputeSignature(
 }
 
 
-static string SaveFile(
-    ApiResult result,
-    string token,
-    byte[] fileBytes)
-{
-    string folder =
-        result.FileAction == "readwrite"
-            ? Path.Combine(
-                result.ClientFilePath,
-                token
-            )
-            : result.ClientFilePath;
 
-    Directory.CreateDirectory(folder);
-
-    string filePath =
-        Path.Combine(
-            folder,
-            Path.GetFileName(
-                result.FileName
-            )
-        );
-
-    File.WriteAllBytes(
-        filePath,
-        fileBytes
-    );
-
-    return filePath;
-}
 
 
 static ApiContext GetApiContext(
@@ -1063,8 +1032,6 @@ sealed class StreamingJsonFileContent : HttpContent
         )
         {
             await input.CopyToAsync(base64Stream);
-
-            base64Stream.FlushFinalBlock();
         }
 
         await stream.WriteAsync(
