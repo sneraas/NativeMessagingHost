@@ -399,18 +399,18 @@ static async Task<string> ComputeUploadSignature(
         Encoding.UTF8.GetBytes(secretKey)
     );
 
-    await using CryptoStream hmacStream = new(
-        Stream.Null,
-        hmac,
-        CryptoStreamMode.Write,
-        true
-    );
-
-    await hmacStream.WriteAsync(metadata);
-    await hmacStream.WriteAsync(prefixBytes);
-
     await using (
-        FileStream input = new(
+        CryptoStream hmacStream = new(
+            Stream.Null,
+            hmac,
+            CryptoStreamMode.Write
+        )
+    )
+    {
+        await hmacStream.WriteAsync(metadata);
+        await hmacStream.WriteAsync(prefixBytes);
+
+        await using FileStream input = new(
             filePath,
             FileMode.Open,
             FileAccess.Read,
@@ -418,24 +418,24 @@ static async Task<string> ComputeUploadSignature(
             81920,
             FileOptions.Asynchronous |
             FileOptions.SequentialScan
-        )
-    )
-    {
-        using ToBase64Transform transform = new();
-
-        await using CryptoStream base64Stream = new(
-            hmacStream,
-            transform,
-            CryptoStreamMode.Write,
-            true
         );
 
-        await input.CopyToAsync(base64Stream);
+        using ToBase64Transform transform = new();
+
+        await using (
+            CryptoStream base64Stream = new(
+                hmacStream,
+                transform,
+                CryptoStreamMode.Write,
+                true
+            )
+        )
+        {
+            await input.CopyToAsync(base64Stream);
+        }
+
+        await hmacStream.WriteAsync(suffixBytes);
     }
-
-    await hmacStream.WriteAsync(suffixBytes);
-
-    hmacStream.FlushFinalBlock();
 
     return WebUtility.UrlEncode(
         Convert.ToBase64String(
@@ -443,7 +443,6 @@ static async Task<string> ComputeUploadSignature(
         )
     );
 }
-
 
 static bool IsFileOpen(string filePath)
 {
