@@ -12,7 +12,26 @@ using System.Text.Json.Serialization;
 
 if (args.Length > 0 && args[0] == "--worker")
 {
-    await RunWorker(args[1], args[2], args[3]);
+    try
+    {
+        await RunWorker(
+            args[1],
+            args[2],
+            args[3]
+        );
+    }
+    catch (Exception ex)
+    {
+        WriteError(ex);
+
+        NativeMethods.MessageBoxW(
+            IntPtr.Zero,
+            ex.ToString(),
+            "STARLIMS LocalFS Worker ERROR",
+            0x10
+        );
+    }
+
     return;
 }
 
@@ -76,16 +95,23 @@ if (result.FileAction == "readwrite")
             filePath
         });
     }
-    catch (Exception ex)
-    {
-        WriteError(ex);
+catch (Exception ex)
+{
+    WriteError(ex);
 
-        WriteResponse(output, new
-        {
-            ok = false,
-            error = ex.Message
-        });
-    }
+    NativeMethods.MessageBoxW(
+        IntPtr.Zero,
+        ex.ToString(),
+        "STARLIMS LocalFS ERROR",
+        0x10
+    );
+
+    WriteResponse(output, new
+    {
+        ok = false,
+        error = ex.Message
+    });
+}
 }
 static void StartWorker(string token, string filePath, string name)
 {
@@ -777,61 +803,23 @@ static ApiContext GetApiContext(
 }
 
 
-static Credential ReadCredential(
-    string target)
+catch (Exception ex)
 {
-    if (!NativeMethods.CredReadW(
-        target,
-        1,
-        0,
-        out IntPtr pointer))
+    WriteError(ex);
+
+    NativeMethods.MessageBoxW(
+        IntPtr.Zero,
+        ex.ToString(),
+        "STARLIMS LocalFS ERROR",
+        0x10
+    );
+
+    WriteResponse(output, new
     {
-        throw new Win32Exception(
-            Marshal.GetLastWin32Error(),
-            $"Credential not found: {target}"
-        );
-    }
-
-    try
-    {
-        NativeCredential credential =
-            Marshal.PtrToStructure<NativeCredential>(
-                pointer
-            );
-
-        string userName =
-            Marshal.PtrToStringUni(
-                credential.UserName
-            ) ?? "";
-
-        byte[] bytes =
-            new byte[
-                credential.CredentialBlobSize
-            ];
-
-        Marshal.Copy(
-            credential.CredentialBlob,
-            bytes,
-            0,
-            bytes.Length
-        );
-
-        string password =
-            Encoding.Unicode
-                .GetString(bytes)
-                .TrimEnd('\0');
-
-        return new Credential(
-            userName,
-            password
-        );
-    }
-    finally
-    {
-        NativeMethods.CredFree(pointer);
-    }
+        ok = false,
+        error = ex.Message
+    });
 }
-
 
 
 static void WriteError(
