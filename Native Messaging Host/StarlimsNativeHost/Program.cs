@@ -17,7 +17,8 @@ if (args.Length > 0 && args[0] == "--worker")
         await RunWorker(
             args[1],
             args[2],
-            args[3]
+            args[3],
+            args[4]
         );
     }
     catch (Exception ex)
@@ -82,10 +83,9 @@ Process.Start(new ProcessStartInfo
     UseShellExecute = true
 });
 
-if (result.FileAction == "readwrite")
-{
-    StartWorker(nativeRequest.Token, filePath, nativeRequest.Name);
-}
+
+    StartWorker(nativeRequest.Token, filePath, nativeRequest.Name, result.FileAction);
+
 
 
         WriteResponse(output, new
@@ -113,7 +113,7 @@ catch (Exception ex)
     });
 }
 }
-static void StartWorker(string token, string filePath, string name)
+static void StartWorker(string token, string filePath, string name, string actionType)
 {
     ProcessStartInfo startInfo = new()
     {
@@ -126,6 +126,7 @@ static void StartWorker(string token, string filePath, string name)
     startInfo.ArgumentList.Add(token);
     startInfo.ArgumentList.Add(filePath);
     startInfo.ArgumentList.Add(name);
+    startInfo.ArgumentList.Add(actionType);
 
     Process.Start(startInfo);
 }
@@ -133,9 +134,46 @@ static void StartWorker(string token, string filePath, string name)
 static async Task RunWorker(
     string token,
     string filePath,
+    string name,
+    string actionType)
+{
+    switch (actionType.ToLowerInvariant())
+    {
+        case "readwrite":
+            await RunReadWriteWorker(
+                token,
+                filePath,
+                name
+            );
+            break;
+
+        case "read":
+            await RunReadWorker(
+                token,
+                filePath,
+                name
+            );
+            break;
+
+        case "saveopen":
+            await RunSaveOpenWorker(
+                token,
+                filePath,
+                name
+            );
+            break;
+
+        default:
+            throw new Exception(
+                $"Unknown file action: {actionType}"
+            );
+    }
+}
+static async Task RunReadWriteWorker(
+    string token,
+    string filePath,
     string name)
 {
-    // Wait until another program has opened the file
     while (!IsFileOpen(filePath))
     {
         await Task.Delay(250);
@@ -144,7 +182,6 @@ static async Task RunWorker(
     DateTime lastWriteTime =
         File.GetLastWriteTimeUtc(filePath);
 
-    // Stay alive while the file is open
     while (IsFileOpen(filePath))
     {
         DateTime currentWriteTime =
@@ -164,23 +201,25 @@ static async Task RunWorker(
         await Task.Delay(250);
     }
 
-    // Final check in case the last save happened
-    // just before the file was closed
     DateTime finalWriteTime =
         File.GetLastWriteTimeUtc(filePath);
-if (finalWriteTime != lastWriteTime)
-{
-    await UploadFile(
+
+    if (finalWriteTime != lastWriteTime)
+    {
+        await UploadFile(
+            token,
+            filePath,
+            name
+        );
+    }
+
+    await EndClientFileHandling(
         token,
-        filePath,
         name
     );
-}
-
-await EndClientFileHandling(token, name);
 
     string folderPath =
-    Path.GetDirectoryName(filePath)!;
+        Path.GetDirectoryName(filePath)!;
 
     File.Delete(filePath);
 
@@ -188,6 +227,48 @@ await EndClientFileHandling(token, name);
         folderPath,
         true
     );
+}
+
+static async Task RunReadWorker(
+    string token,
+    string filePath,
+    string name)
+{
+       while (!IsFileOpen(filePath))
+    {
+        await Task.Delay(250);
+    }
+
+    DateTime lastWriteTime =
+        File.GetLastWriteTimeUtc(filePath);
+
+    while (IsFileOpen(filePath))
+    {
+           await Task.Delay(250);
+    }
+
+   
+
+    string folderPath =
+        Path.GetDirectoryName(filePath)!;
+
+    File.Delete(filePath);
+
+    Directory.Delete(
+        folderPath,
+        true
+    );
+}
+
+static async Task RunSaveOpenWorker(
+    string token,
+    string filePath,
+    string name)
+{
+       while (!IsFileOpen(filePath))
+    {
+        await Task.Delay(250);
+    }
 
 }
 
