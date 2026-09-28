@@ -803,22 +803,64 @@ static ApiContext GetApiContext(
 }
 
 
-catch (Exception ex)
+static Credential ReadCredential(
+    string target)
 {
-    WriteError(ex);
-
-    NativeMethods.MessageBoxW(
-        IntPtr.Zero,
-        ex.ToString(),
-        "STARLIMS LocalFS ERROR",
-        0x10
-    );
-
-    WriteResponse(output, new
+    if (!NativeMethods.CredReadW(
+        target,
+        1,
+        0,
+        out IntPtr pointer))
     {
-        ok = false,
-        error = ex.Message
-    });
+        int errorCode =
+            Marshal.GetLastWin32Error();
+
+        throw new Win32Exception(
+            errorCode,
+            $"Credential lookup failed.\n" +
+            $"Target: {target}\n" +
+            $"Windows error: {errorCode}"
+        );
+    }
+
+    try
+    {
+        NativeCredential credential =
+            Marshal.PtrToStructure<NativeCredential>(
+                pointer
+            );
+
+        string userName =
+            Marshal.PtrToStringUni(
+                credential.UserName
+            ) ?? "";
+
+        byte[] bytes =
+            new byte[
+                credential.CredentialBlobSize
+            ];
+
+        Marshal.Copy(
+            credential.CredentialBlob,
+            bytes,
+            0,
+            bytes.Length
+        );
+
+        string password =
+            Encoding.Unicode
+                .GetString(bytes)
+                .TrimEnd('\0');
+
+        return new Credential(
+            userName,
+            password
+        );
+    }
+    finally
+    {
+        NativeMethods.CredFree(pointer);
+    }
 }
 
 
