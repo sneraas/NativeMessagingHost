@@ -12,7 +12,7 @@ using System.Text.Json.Serialization;
 
 if (args.Length > 0 && args[0] == "--worker")
 {
-    await RunWorker(args[1], args[2]);
+    await RunWorker(args[1], args[2], args[3]);
     return;
 }
 
@@ -41,8 +41,7 @@ while (true)
             ?? throw new Exception("Invalid request.");
 
         ApiContext api = GetApiContext(
-            nativeRequest.Key,
-            nativeRequest.Secret
+            nativeRequest.Name
         );
 
         ApiResult result = await GetDocumentInfo(
@@ -66,7 +65,7 @@ Process.Start(new ProcessStartInfo
 
 if (result.FileAction == "readwrite")
 {
-    StartWorker(nativeRequest.Token, filePath);
+    StartWorker(nativeRequest.Token, filePath, nativeRequest.Name);
 }
 
 
@@ -88,7 +87,7 @@ if (result.FileAction == "readwrite")
         });
     }
 }
-static void StartWorker(string token, string filePath)
+static void StartWorker(string token, string filePath, string name)
 {
     ProcessStartInfo startInfo = new()
     {
@@ -100,13 +99,15 @@ static void StartWorker(string token, string filePath)
     startInfo.ArgumentList.Add("--worker");
     startInfo.ArgumentList.Add(token);
     startInfo.ArgumentList.Add(filePath);
+    startInfo.ArgumentList.Add(name);
 
     Process.Start(startInfo);
 }
 
 static async Task RunWorker(
     string token,
-    string filePath)
+    string filePath,
+    string name)
 {
     // Wait until another program has opened the file
     while (!IsFileOpen(filePath))
@@ -127,7 +128,8 @@ static async Task RunWorker(
         {
             await UploadFile(
                 token,
-                filePath
+                filePath,
+                name
             );
 
             lastWriteTime = currentWriteTime;
@@ -144,18 +146,13 @@ if (finalWriteTime != lastWriteTime)
 {
     await UploadFile(
         token,
-        filePath
+        filePath,
+        name
     );
 }
 
-await EndClientFileHandling(token);
+await EndClientFileHandling(token, name);
 
-NativeMethods.MessageBoxW(
-    IntPtr.Zero,
-    $"{Path.GetFileName(filePath)} er lukka.",
-    "STARLIMS LocalFS",
-    0x40
-);
     string folderPath =
     Path.GetDirectoryName(filePath)!;
 
@@ -171,7 +168,8 @@ NativeMethods.MessageBoxW(
 
 static async Task UploadFile(
     string token,
-    string filePath)
+    string filePath,
+    string name)
 {
     string? snapshotPath = null;
 
@@ -180,10 +178,7 @@ static async Task UploadFile(
         snapshotPath =
             await CreateUploadSnapshot(filePath);
 
-        ApiContext api = GetApiContext(
-            "DEV_API_KEY",
-            "DEV_API_SECRET"
-        );
+        ApiContext api = GetApiContext(name);
 
         using HttpClientHandler handler = new()
         {
@@ -247,17 +242,6 @@ static async Task UploadFile(
         string responseBody =
             await response.Content.ReadAsStringAsync();
 
-        NativeMethods.MessageBoxW(
-            IntPtr.Zero,
-            $"Status: {(int)response.StatusCode} {response.StatusCode}\n\n" +
-            $"Token: {token}\n" +
-            $"File size: {new FileInfo(snapshotPath).Length} bytes\n\n" +
-            $"Response:\n{responseBody}",
-            "STARLIMS Upload",
-            response.IsSuccessStatusCode
-                ? 0x40u
-                : 0x10u
-        );
 
         if (!response.IsSuccessStatusCode)
         {
@@ -295,13 +279,9 @@ static async Task UploadFile(
     }
 }
 
-static async Task EndClientFileHandling(
-    string token)
+static async Task EndClientFileHandling(string token, string name)
 {
-    ApiContext api = GetApiContext(
-        "DEV_API_KEY",
-        "DEV_API_SECRET"
-    );
+    ApiContext api = GetApiContext(name);
 
     using HttpClientHandler handler = new()
     {
@@ -772,40 +752,22 @@ static string ComputeSignature(
 
 
 static ApiContext GetApiContext(
-    string keyCredentialName,
-    string secretCredentialName)
+    string name)
 {
+    string apiRoot =
+        name.EndsWith("/")
+            ? name
+            : name + "/";
+
     Credential key =
         ReadCredential(
-            keyCredentialName
+            apiRoot + "_API"
         );
 
     Credential secret =
         ReadCredential(
-            secretCredentialName
+            apiRoot + "_SECRET"
         );
-
-    if (!string.Equals(
-        key.UserName,
-        secret.UserName,
-        StringComparison.OrdinalIgnoreCase))
-    {
-        throw new Exception(
-            "API key and secret belong to different environments."
-        );
-    }
-
-    string apiRoot =
-        key.UserName.ToUpperInvariant() switch
-        {
-            "DEV" =>
-                "https://rhs-limsapou-83.ad.ous-hf.no/" +
-                "STARLIMS.DEV/rest.web.api/",
-
-            _ => throw new Exception(
-                $"Unknown environment: {key.UserName}"
-            )
-        };
 
     return new ApiContext(
         apiRoot,
@@ -1042,11 +1004,8 @@ sealed class NativeRequest
     [JsonPropertyName("token")]
     public string Token { get; set; } = "";
 
-    [JsonPropertyName("key")]
-    public string Key { get; set; } = "";
-
-    [JsonPropertyName("secret")]
-    public string Secret { get; set; } = "";
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
 }
 
 
