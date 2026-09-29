@@ -60,10 +60,20 @@ while (true)
             JsonSerializer.Deserialize<NativeRequest>(json)
             ?? throw new Exception("Invalid request.");
 
+        if (nativeRequest.Type == "ping")
+        {
+            WriteResponse(output, new
+            {
+                ok = true,
+                type = "pong"
+            });
+
+            continue;
+        }
+
         ApiContext api = GetApiContext(
             nativeRequest.Name
         );
-
         ApiResult result = await GetDocumentInfo(
             nativeRequest.Token,
             api,
@@ -1117,6 +1127,9 @@ sealed class NativeRequest
 
     [JsonPropertyName("name")]
     public string Name { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
 }
 
 
