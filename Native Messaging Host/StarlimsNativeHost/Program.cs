@@ -555,69 +555,7 @@ static async Task<string> CreateUploadSnapshot(
         await Task.Delay(100);
     }
 }
-static class WorkerRegistry
-{
-    private static readonly ConcurrentDictionary<int, Process> workers = new();
 
-    private static DateTime lastPing =
-        DateTime.UtcNow;
-
-    private static Timer? timer;
-
-    public static void RegisterPing()
-    {
-        lastPing = DateTime.UtcNow;
-    }
-
-    public static void Register(Process process)
-    {
-        process.EnableRaisingEvents = true;
-
-        workers[process.Id] = process;
-
-        process.Exited += (_, _) =>
-        {
-            workers.TryRemove(
-                process.Id,
-                out _
-            );
-
-            process.Dispose();
-        };
-
-        if (process.HasExited)
-        {
-            workers.TryRemove(
-                process.Id,
-                out _
-            );
-
-            process.Dispose();
-        }
-    }
-
-    public static void StartIdleShutdown()
-    {
-        timer = new Timer(
-            _ =>
-            {
-                TimeSpan idleTime =
-                    DateTime.UtcNow - lastPing;
-
-                if (
-                    idleTime >= TimeSpan.FromMinutes(3) &&
-                    workers.IsEmpty
-                )
-                {
-                    Environment.Exit(0);
-                }
-            },
-            null,
-            TimeSpan.FromSeconds(30),
-            TimeSpan.FromSeconds(30)
-        );
-    }
-}
 
 static async Task<string> ComputeUploadSignature(
     string url,
@@ -1127,7 +1065,69 @@ static void WriteResponse(
     output.Write(data);
     output.Flush();
 }
+static class WorkerRegistry
+{
+    private static readonly ConcurrentDictionary<int, Process> workers = new();
 
+    private static DateTime lastPing =
+        DateTime.UtcNow;
+
+    private static Timer? timer;
+
+    public static void RegisterPing()
+    {
+        lastPing = DateTime.UtcNow;
+    }
+
+    public static void Register(Process process)
+    {
+        process.EnableRaisingEvents = true;
+
+        workers[process.Id] = process;
+
+        process.Exited += (_, _) =>
+        {
+            workers.TryRemove(
+                process.Id,
+                out _
+            );
+
+            process.Dispose();
+        };
+
+        if (process.HasExited)
+        {
+            workers.TryRemove(
+                process.Id,
+                out _
+            );
+
+            process.Dispose();
+        }
+    }
+
+    public static void StartIdleShutdown()
+    {
+        timer = new Timer(
+            _ =>
+            {
+                TimeSpan idleTime =
+                    DateTime.UtcNow - lastPing;
+
+                if (
+                    idleTime >= TimeSpan.FromMinutes(3) &&
+                    workers.IsEmpty
+                )
+                {
+                    Environment.Exit(0);
+                }
+            },
+            null,
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(30)
+        );
+    }
+}
 static class NativeMethods
 {
     [DllImport(
