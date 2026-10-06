@@ -741,16 +741,23 @@ static async Task<ApiResult> GetDocumentInfo(
     }
 
     ApiResponse apiResponse = JsonSerializer.Deserialize<ApiResponse>(body)
-        ?? throw new Exception("Invalid API response.");
+    ?? throw new Exception("Invalid API response.");
 
-    ApiResult result = apiResponse.Result.FirstOrDefault()
-        ?? throw new Exception("API returned no result.");
+ApiResult result = apiResponse.Result.FirstOrDefault()
+    ?? throw new Exception("API returned no result.");
 
-    result.ClientFilePath = Environment.ExpandEnvironmentVariables(
-        result.ClientFilePath
+if (string.IsNullOrWhiteSpace(result.FileAction))
+{
+    throw new Exception(
+        $"FILE_ACTION is empty or missing. API response:\n{body}"
     );
+}
 
-    return result;
+result.ClientFilePath = Environment.ExpandEnvironmentVariables(
+    result.ClientFilePath
+);
+
+return result;
 }
 
 static async Task<string> DownloadFile(
