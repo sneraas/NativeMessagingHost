@@ -743,8 +743,14 @@ static async Task<ApiResult> GetDocumentInfo(
     ApiResponse apiResponse = JsonSerializer.Deserialize<ApiResponse>(body)
         ?? throw new Exception("Invalid API response.");
 
-    return apiResponse.Result.FirstOrDefault()
+    ApiResult result = apiResponse.Result.FirstOrDefault()
         ?? throw new Exception("API returned no result.");
+
+    result.ClientFilePath = Environment.ExpandEnvironmentVariables(
+        result.ClientFilePath
+    );
+
+    return result;
 }
 
 static async Task<string> DownloadFile(
