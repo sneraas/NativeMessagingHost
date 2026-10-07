@@ -220,7 +220,7 @@ static async Task<FileActionResult> ExecuteFileAction(
             }
 
             await UploadFile(token, filePath, name);
-            await EndClientFileHandling(token, name);
+            await EndClientFileHandling(token, name, filePath);
 
             return new FileActionResult(filePath);
         }
@@ -512,7 +512,7 @@ static async Task UploadFile(
     }
 }
 
-static async Task EndClientFileHandling(string token, string name)
+static async Task EndClientFileHandling(string token, string name, string? filePath = null)
 {
     ApiContext api = GetApiContext(name);
 
@@ -524,7 +524,15 @@ static async Task EndClientFileHandling(string token, string name)
     using HttpClient client = new(handler);
 
     string url = api.ApiRoot + "v1/Folders/endClientFileHandling";
-    string json = JsonSerializer.Serialize(new { token });
+    string json = filePath == null
+    ? JsonSerializer.Serialize(new { token })
+    : JsonSerializer.Serialize(new
+    {
+        token,
+        filePath,
+        fileName = Path.GetFileName(filePath)
+    });
+    
     string timestamp = CreateTimestamp();
 
     using HttpRequestMessage request = new(HttpMethod.Post, url);
