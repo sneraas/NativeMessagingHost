@@ -198,9 +198,10 @@ static async Task<FileActionResult> ExecuteFileAction(
 
         case "upload":
         {
-            string? filePath = await SelectUploadFile(
-                document.ClientFilePath
-            );
+            string? filePath = Path.Combine(
+            Environment.ExpandEnvironmentVariables(document.ClientFilePath),
+            document.FileName
+        );
 
             if (filePath == null)
             {
@@ -334,95 +335,6 @@ static async Task RunReadWorker(string filePath)
     Directory.Delete(folderPath, true);
 }
 
-static Task<string?> SelectUploadFile(string initialDirectory)
-{
-    if (!OperatingSystem.IsWindows())
-    {
-        throw new PlatformNotSupportedException(
-            "File selection requires Windows."
-        );
-    }
-
-    TaskCompletionSource<string?> completion = new(
-        TaskCreationOptions.RunContinuationsAsynchronously
-    );
-
-    IntPtr ownerWindow = NativeMethods.GetForegroundWindow();
-
-    Thread dialogThread = new(() =>
-    {
-        IntPtr fileBuffer = IntPtr.Zero;
-
-        try
-        {
-            const int bufferCapacity = 32768;
-
-            fileBuffer = Marshal.AllocHGlobal(
-                bufferCapacity * sizeof(char)
-            );
-
-            Marshal.WriteInt16(fileBuffer, 0);
-
-            NativeOpenFileName dialog = new()
-            {
-                StructSize = (uint)Marshal.SizeOf<NativeOpenFileName>(),
-                OwnerWindow = ownerWindow,
-                Filter = "All files (*.*)\0*.*\0\0",
-                FilterIndex = 1,
-                File = fileBuffer,
-                MaxFile = bufferCapacity,
-                InitialDirectory = Directory.Exists(initialDirectory)
-                    ? initialDirectory
-                    : null,
-                Title = "STARLIMS - Select a file to upload",
-                Flags = NativeMethods.OFN_EXPLORER
-                    | NativeMethods.OFN_FILEMUSTEXIST
-                    | NativeMethods.OFN_PATHMUSTEXIST
-                    | NativeMethods.OFN_HIDEREADONLY
-                    | NativeMethods.OFN_NOCHANGEDIR
-            };
-
-            if (NativeMethods.GetOpenFileNameW(ref dialog))
-            {
-                string filePath = Marshal.PtrToStringUni(fileBuffer)
-                    ?? throw new Exception("The file dialog returned no path.");
-
-                completion.SetResult(filePath);
-                return;
-            }
-
-            uint errorCode = NativeMethods.CommDlgExtendedError();
-
-            if (errorCode != 0)
-            {
-                throw new Exception(
-                    $"File selection failed. Dialog error: 0x{errorCode:X}."
-                );
-            }
-
-            completion.SetResult(null);
-        }
-        catch (Exception ex)
-        {
-            completion.SetException(ex);
-        }
-        finally
-        {
-            if (fileBuffer != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(fileBuffer);
-            }
-        }
-    })
-    {
-        IsBackground = true
-    };
-
-    dialogThread.SetApartmentState(ApartmentState.STA);
-    dialogThread.Start();
-
-    return completion.Task;
-}
 
 static async Task UploadFile(
     string token,
