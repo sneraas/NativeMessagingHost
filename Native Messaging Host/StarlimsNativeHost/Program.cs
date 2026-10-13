@@ -328,6 +328,7 @@ static async Task RunReadWriteWorker(
     Directory.Delete(folderPath, true);
 }
 
+
 static async Task RunReadWorker(string filePath)
 {
     while (!IsFileOpen(filePath))
@@ -495,6 +496,14 @@ static async Task UploadFile(
                 + $"{response.StatusCode}\n{body}"
             );
         }
+        
+    }
+    catch (Exception ex)
+    {
+        ShowError(
+            ex,
+            "STARLIMS LocalFS couldn't upload the file, check your internet connection"
+        );
     }
     finally
     {
@@ -506,7 +515,7 @@ static async Task UploadFile(
             }
             catch (Exception ex)
             {
-                WriteError(ex);
+                ShowError(ex, "STARLIMS LocalFS couldn't upload the file, check your internet connection");
             }
         }
     }
@@ -970,11 +979,15 @@ static void WriteError(Exception exception)
 
     try
     {
+        string logDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "_STARLIMS LocalFS Errors"
+        );
+
+        Directory.CreateDirectory(logDirectory);
+
         File.WriteAllText(
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                logName
-            ),
+            Path.Combine(logDirectory, logName),
             exception.ToString()
         );
     }
@@ -989,8 +1002,8 @@ static void WriteError(Exception exception)
         }
         catch
         {
-            // Logging must not prevent the error dialog from being shown.
-        }
+
+         }
     }
 }
 
