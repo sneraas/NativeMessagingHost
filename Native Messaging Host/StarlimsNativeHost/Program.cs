@@ -195,6 +195,16 @@ static async Task<FileActionResult> ExecuteFileAction(
 
             return new FileActionResult(filePath);
         }
+        case "open":
+        {
+           string filePath = Environment.ExpandEnvironmentVariables(document.ClientFilePath);
+
+            await EndClientFileHandling(token, name);
+
+            OpenDocument(filePath);
+
+            return new FileActionResult(filePath);
+        }
 
         case "upload":
         {
@@ -515,7 +525,8 @@ static async Task UploadFile(
             }
             catch (Exception ex)
             {
-                ShowError(ex, "STARLIMS LocalFS couldn't upload the file, check your internet connection");
+                ShowError(ex, 
+                "STARLIMS LocalFS couldn't upload the file, check your internet connection");
             }
         }
     }
