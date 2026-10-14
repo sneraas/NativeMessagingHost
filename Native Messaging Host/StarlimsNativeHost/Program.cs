@@ -197,11 +197,40 @@ static async Task<FileActionResult> ExecuteFileAction(
         }
         case "open":
         {
-           string filePath = Environment.ExpandEnvironmentVariables(document.ClientFilePath);
+            string filePath = Environment.ExpandEnvironmentVariables(
+                document.ClientFilePath
+            );
 
-            await EndClientFileHandling(token, name);
+            if (!Path.IsPathFullyQualified(filePath))
+            {
+                throw new ArgumentException(
+                    "CLIENT_FILE_PATH must be a full path to the file."
+                );
+            }
+
+            if (!File.Exists(filePath))
+            {
+                throw new FileNotFoundException(
+                    "The local file does not exist or cannot be accessed.",
+                    filePath
+                );
+            }
 
             OpenDocument(filePath);
+
+            try
+            {
+                await EndClientFileHandling(token, name);
+            }
+            catch (Exception ex)
+            {
+                throw new IOException(
+                    "The local file was opened, but STARLIMS did not "
+                    + "confirm completion.\n"
+                    + $"Local file: {filePath}",
+                    ex
+                );
+            }
 
             return new FileActionResult(filePath);
         }
@@ -308,16 +337,40 @@ static async Task RunReadWriteWorker(
         await Task.Delay(250);
     }
 
-    DateTime lastWriteTime = File.GetLastWriteTimeUtc(filePath);
+    DateTime lastObservedWriteTime = File.GetLastWriteTimeUtc(filePath);
+    Exception? lastUploadError = null;
 
     while (IsFileOpen(filePath))
     {
         DateTime currentWriteTime = File.GetLastWriteTimeUtc(filePath);
 
-        if (currentWriteTime != lastWriteTime)
+        if (currentWriteTime != lastObservedWriteTime)
         {
-            await UploadFile(token, filePath, name);
-            lastWriteTime = currentWriteTime;
+            // Record the observed save even if its upload fails.
+            // Only a new write triggers another upload attempt.
+            lastObservedWriteTime = currentWriteTime;
+
+            try
+            {
+                await UploadFile(token, filePath, name);
+                lastUploadError = null;
+            }
+            catch (Exception ex)
+            {
+                lastUploadError = ex;
+
+                ShowError(
+                    new IOException(
+                        "The file could not be uploaded to STARLIMS.\n"
+                        + $"Local file: {filePath}\n\n"
+                        + "The local file has not been deleted.\n"
+                        + "Resolve the error, then make a change and "
+                        + "save the document again.",
+                        ex
+                    ),
+                    "STARLIMS LocalFS - Upload failed"
+                );
+            }
         }
 
         await Task.Delay(250);
@@ -325,12 +378,44 @@ static async Task RunReadWriteWorker(
 
     DateTime finalWriteTime = File.GetLastWriteTimeUtc(filePath);
 
-    if (finalWriteTime != lastWriteTime)
+    // Upload a new save detected at close, without retrying a failed version.
+    if (finalWriteTime != lastObservedWriteTime)
     {
-        await UploadFile(token, filePath, name);
+        try
+        {
+            await UploadFile(token, filePath, name);
+            lastUploadError = null;
+        }
+        catch (Exception ex)
+        {
+            lastUploadError = ex;
+        }
     }
 
-    await EndClientFileHandling(token, name);
+    if (lastUploadError != null)
+    {
+        throw new IOException(
+            "The latest detected save has no successful upload confirmation.\n"
+            + "File handling has not been completed in STARLIMS.\n"
+            + $"The local file has been kept:\n{filePath}\n\n"
+            + "The file is no longer being monitored.",
+            lastUploadError
+        );
+    }
+
+    try
+    {
+        await EndClientFileHandling(token, name);
+    }
+    catch (Exception ex)
+    {
+        throw new IOException(
+            "STARLIMS did not confirm completion of file handling.\n"
+            + $"The local file has been kept:\n{filePath}\n\n"
+            + "The file is no longer being monitored.",
+            ex
+        );
+    }
 
     string folderPath = Path.GetDirectoryName(filePath)!;
 
@@ -506,14 +591,6 @@ static async Task UploadFile(
                 + $"{response.StatusCode}\n{body}"
             );
         }
-        
-    }
-    catch (Exception ex)
-    {
-        ShowError(
-            ex,
-            "STARLIMS LocalFS couldn't upload the file, check your internet connection"
-        );
     }
     finally
     {
@@ -525,8 +602,9 @@ static async Task UploadFile(
             }
             catch (Exception ex)
             {
-                ShowError(ex, 
-                "STARLIMS LocalFS couldn't upload the file, check your internet connection");
+                // Snapshot cleanup must not hide an upload error or
+                // report a successful upload as failed.
+                WriteError(ex);
             }
         }
     }
